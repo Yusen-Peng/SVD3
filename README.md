@@ -4,9 +4,9 @@
 
 ![alt text](docs/SVD_Pi3.png)
 
-## 🔥 SVD-π3 Implementatin Roadmap
+## 🔥 SVD-π3 Implementation Roadmap
 
-- [x] Whitening only (no updates)
+- [x] Truncation-Aware Data Whitening
   - [x] collect calibration data
     - [x] sintel_training_ALLMODS_512_224_8_10_3.pt (64 batches, 512 images)
   - [x] derive the whitening matrix via profiling 
@@ -16,17 +16,61 @@
     - [x] SVD_Pi3MLP
     - [x] Pi3_whitening
       - [x] hierarchical attempts on SVD (float32 GPU -> float64 GPU -> float64 CPU)
-- [ ] Whitening + local update (light finetune)
-- [ ] Local update only (no whitening)
 - [ ] evaluation
-  - [ ] performance/accuracy evaluation
-
+  - [x] performance/accuracy evaluation (for now, focus on depth estimation)
+    - [x] in order to load checkpoints, implement a CompressedPi3 that inherits Pi3 
+    - [x] load the (whitened + compressed) checkpoints
+    - [x] run evaluation
   - [ ] efficiency evaluation
+    - [ ] TBD
+- [ ] LoRA finetuning
+  - [ ] TBD
 
+## 🔥 SVD-π3 Implementation details (commands + results)
+
+Truncation-aware data whitening:
 
 ```bash
-CUDA_VISIBILE_DEVICES=0 python Pi3_main/SVDPi3.py --step 1 --ckpt Pi3_main/pi3_model.safetensors --save_path Pi3_main
+# stay in 'SVD-pi3' (root directory)
+CUDA_VISIBILE_DEVICES=0 python Pi3_main/SVDPi3.py --step 1 --ckpt Pi3_main/pi3_model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache
 ```
+
+Performance Evaluation:
+
+- [x] Monocular Depth Estimation
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/monodepth/infer.py
+python Pi3_evaluation/monodepth/eval.py
+```
+
+original π3:
+
+```python
+{'Abs Rel': 0.2796176944859495, 'Sq Rel': 1.276705312700384, 'RMSE': 3.7178159584027632, 'Log RMSE': 0.5286988564434099, 'δ < 1.': 0.0, 'δ < 1.25': 0.616369625758487, 'δ < 1.25^2': 0.78750964094564, 'δ < 1.25^3': 0.8520245890568844}
+```
+
+compressed π3 (no LoRA finetuned):
+
+```python
+{'Abs Rel': 0.7001590852341619, 'Sq Rel': 5.015428265738036, 'RMSE': 7.187596822293912, 'Log RMSE': 0.6972085129552443, 'δ < 1.': 0.0, 'δ < 1.25': 0.3193632831349897, 'δ < 1.25^2': 0.5601810225270805, 'δ < 1.25^3': 0.7066331125178978}
+```
+
+- [ ] Video Depth Estimation
+
+- [ ] Relative Camera Pose Estimation
+
+- [ ] Point Map Estimation
+
+Performance Evaluation of the compressed/whitened π3 model:
+
+
+
+
+
+
+
 
 ## SVD-LLM preliminaries
 

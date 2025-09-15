@@ -1,0 +1,78 @@
+# @package _global_
+
+train_dataset:
+    length: 10000000         # dummy
+
+    weights: 
+        TarTanAir: 8000
+        ScanNet: 20000
+        CO3DV2: 10000
+
+    TarTanAir:
+        _target_: datasets.tartanair_dataset.TarTanAirDataset
+        z_far: 80
+        frame_num: 8
+        aug_crop: 16
+        transform:
+            _partial_: true
+            _target_: datasets.base.transforms.JitterJpegLossBlurring
+        aug_focal: 0.9
+        mode: 'train'
+
+    ScanNet:
+        _target_: datasets.scannet_dataset.ScannetDataset
+        z_far: 80
+        frame_num: 8
+        aug_crop: 16
+        transform:
+            _partial_: true
+            _target_: datasets.base.transforms.JitterJpegLossBlurring
+        aug_focal: 0.9
+        mode: 'train'
+
+    CO3DV2:
+        _target_: datasets.co3dv2_dataset.CO3DV2Dataset
+        z_far: 0
+        frame_num: 8
+        aug_crop: 16
+        transform:
+            _partial_: true
+            _target_: datasets.base.transforms.JitterJpegLossBlurring
+        aug_focal: 0.9
+        mode: 'train'
+
+
+train_dataloader:
+    drop_last: True
+    shuffle: True
+
+test_dataset:
+    weights: 
+        ScanNet: 2000
+        CO3DV2: 2000
+
+    ScanNet:
+        _target_: datasets.scannet_dataset.ScannetDataset
+        z_far: 80
+        frame_num: 8
+        resolution:
+            - [518, 336]
+        transform:
+            _partial_: true
+            _target_: datasets.base.transforms.ImgToTensor
+        mode: 'test'
+
+    CO3DV2:
+        _target_: datasets.co3dv2_dataset.CO3DV2Dataset
+        z_far: 0
+        frame_num: 8
+        resolution:
+            - [518, 336]
+        transform:
+            _partial_: true
+            _target_: datasets.base.transforms.ImgToTensor
+        mode: 'test'
+
+test_dataloader:
+    drop_last: False
+    shuffle: False

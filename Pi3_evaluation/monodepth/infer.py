@@ -8,10 +8,13 @@ import torch
 
 from tqdm import tqdm
 from omegaconf import DictConfig, ListConfig
+from safetensors.torch import load_file
+
 
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
+from pi3.models.pi3 import CompressedPi3
 from utils.interfaces import infer_monodepth
 from utils.files import list_imgs_a_sequence, get_all_sequences
 from utils.messages import set_default_arg
@@ -24,7 +27,21 @@ def main(hydra_cfg: DictConfig):
     pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/monodepth.yaml
 
     # 0. create model
-    model = Pi3.from_pretrained(pretrained_model_name_or_path).to(hydra_cfg.device).eval()
+    COMPRESSED = True
+    device = hydra_cfg.device
+    ckpt = pretrained_model_name_or_path
+    sd = load_file(ckpt, device=str(device))
+    if COMPRESSED:
+        print(f"😎Loading the compressed Pi3 from {ckpt}...")
+        model = CompressedPi3().to(device).eval()
+        model.load_factorized_state_dict(sd, strict=True)
+    else:
+        print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
+        model = Pi3().to(device).eval()
+        model.load_state_dict(sd)
+    model.to(device)
+
+
     logger = logging.getLogger("monodepth-infer")
     logger.info(f"Loaded Pi3 from {pretrained_model_name_or_path}")
 
