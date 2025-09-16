@@ -21,8 +21,8 @@
     - [x] in order to load checkpoints, implement a CompressedPi3 that inherits Pi3 
     - [x] load the (whitened + compressed) checkpoints
     - [x] run evaluation
-  - [ ] efficiency evaluation
-    - [ ] TBD
+  - [x] efficiency evaluation
+    - [x] throughput (img/sec)
 - [ ] LoRA finetuning
   - [ ] TBD
 
@@ -35,7 +35,7 @@ Truncation-aware data whitening:
 CUDA_VISIBILE_DEVICES=0 python Pi3_main/SVDPi3.py --step 1 --ckpt Pi3_main/pi3_model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache
 ```
 
-Performance Evaluation:
+Evaluation:
 
 - [x] Monocular Depth Estimation
 
@@ -51,10 +51,18 @@ original π3:
 {'Abs Rel': 0.2796176944859495, 'Sq Rel': 1.276705312700384, 'RMSE': 3.7178159584027632, 'Log RMSE': 0.5286988564434099, 'δ < 1.': 0.0, 'δ < 1.25': 0.616369625758487, 'δ < 1.25^2': 0.78750964094564, 'δ < 1.25^3': 0.8520245890568844}
 ```
 
+```log
+[2025-09-15 19:56:42,655][monodepth-infer][INFO] - Overall throughput: 6.66 images/second
+```
+
 compressed π3 (no LoRA finetuned):
 
 ```python
 {'Abs Rel': 0.7001590852341619, 'Sq Rel': 5.015428265738036, 'RMSE': 7.187596822293912, 'Log RMSE': 0.6972085129552443, 'δ < 1.': 0.0, 'δ < 1.25': 0.3193632831349897, 'δ < 1.25^2': 0.5601810225270805, 'δ < 1.25^3': 0.7066331125178978}
+```
+
+```log
+[2025-09-15 19:52:35,451][monodepth-infer][INFO] - Overall throughput: 7.75 images/second
 ```
 
 - [ ] Video Depth Estimation
@@ -62,10 +70,6 @@ compressed π3 (no LoRA finetuned):
 - [ ] Relative Camera Pose Estimation
 
 - [ ] Point Map Estimation
-
-Performance Evaluation of the compressed/whitened π3 model:
-
-
 
 
 

@@ -6,8 +6,8 @@ defaults:
 name: monodepth
 
 pi3:
-  #pretrained_model_name_or_path: /home/wanghaoxuan/SVD-pi3/Pi3_main/pi3_model.safetensors
-  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8.safetensors
+  pretrained_model_name_or_path: /home/wanghaoxuan/SVD-pi3/Pi3_main/pi3_model.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8.safetensors
 
 eval_datasets:
   - sintel

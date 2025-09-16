@@ -5,6 +5,7 @@ import numpy as np
 import cv2
 import logging
 import torch
+import time
 
 from tqdm import tqdm
 from omegaconf import DictConfig, ListConfig
@@ -27,7 +28,7 @@ def main(hydra_cfg: DictConfig):
     pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/monodepth.yaml
 
     # 0. create model
-    COMPRESSED = True
+    COMPRESSED = False
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
     sd = load_file(ckpt, device=str(device))
@@ -64,6 +65,11 @@ def main(hydra_cfg: DictConfig):
         # 3. infer for each sequence
         output_root = osp.join(hydra_cfg.output_dir, dataset_name)
         logger.info(f"[{idx_dataset}/{len(all_eval_datasets)}] Infering monodepth on {dataset_name} dataset..., output to {osp.relpath(output_root, hydra_cfg.work_dir)}")
+        
+        # keep track of the average time
+        time_dict = []
+
+        
         for seq_idx, seq in enumerate(seq_list):
             # 3.1 list the images in the sequence
             filelist = list_imgs_a_sequence(dataset_info, seq)
@@ -71,6 +77,8 @@ def main(hydra_cfg: DictConfig):
             os.makedirs(save_dir, exist_ok=True)
             logger.info(f"[{seq_idx}/{len(seq_list)}] Processing {len(filelist)} images to {osp.relpath(save_dir, hydra_cfg.work_dir)}...")
 
+            
+            t1 = time.time()
             # 3.2 infer for each image
             for file in tqdm(filelist):
                 # 3.2.1 skip if the file already exists
@@ -93,12 +101,35 @@ def main(hydra_cfg: DictConfig):
                 depth_map = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
                 depth_map = (depth_map * 255).astype(np.uint8)
                 cv2.imwrite(png_save_path, depth_map)
+            
+            t2 = time.time()
+            time_dict.append((t2 - t1, len(filelist)))
+
         # for each dataset
         logger.info(f"Monodepth inference for dataset {dataset_name} finished!")
 
     del model
     torch.cuda.empty_cache()
     logger.info(f"Monodepth inference for Pi3 finished!")
+    
+    # dump time_dict into a CSV (headers: time, num_images)
+    if len(time_dict) > 0:
+        csv_path = "inference_time.csv"
+        with open(csv_path, 'w') as f:
+            f.write("time,num_images\n")
+            for t, n in time_dict:
+                f.write(f"{t},{n}\n")
+        logger.info(f"Saved inference time to {osp.relpath(csv_path, hydra_cfg.work_dir)}")
+        total_time = sum([t for t, n in time_dict])
+        total_images = sum([n for t, n in time_dict])
+        logger.info(f"Total inference time: {total_time:.2f} seconds for {total_images} images, average time per image: {total_time / total_images:.4f} seconds")
+
+    # compute the throughput based on the csv
+    if len(time_dict) > 0:
+        total_time = sum([t for t, n in time_dict])
+        total_images = sum([n for t, n in time_dict])
+        throughput = total_images / total_time
+        logger.info(f"Overall throughput: {throughput:.2f} images/second")
 
 if __name__ == "__main__":
     set_default_arg("evaluation", "monodepth")
