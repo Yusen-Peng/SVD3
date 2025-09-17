@@ -16,26 +16,31 @@
     - [x] SVD_Pi3MLP
     - [x] Pi3_whitening
       - [x] hierarchical attempts on SVD (float32 GPU -> float64 GPU -> float64 CPU)
-- [ ] evaluation
+- [x] evaluation
   - [x] performance/accuracy evaluation (for now, focus on depth estimation)
     - [x] in order to load checkpoints, implement a CompressedPi3 that inherits Pi3 
     - [x] load the (whitened + compressed) checkpoints
     - [x] run evaluation
   - [x] efficiency evaluation
     - [x] throughput (img/sec)
-- [ ] LoRA finetuning
+- [ ] LoRA finetuning 
+  - [x] wrap CompressedPi3 with LoRA
+  - [ ] implement Pi3TrainerLoRA from Pi3Trainer [in progress!](Pi3_main/trainers/pi3_trainer.py)
   - [ ] TBD
+  - [ ] TBD
+- [ ] task-agnostic LoRA finetuning (TBD)
+
 
 ## 🔥 SVD-π3 Implementation details (commands + results)
 
-Truncation-aware data whitening:
+### Truncation-aware data whitening
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
 CUDA_VISIBILE_DEVICES=0 python Pi3_main/SVDPi3.py --step 1 --ckpt Pi3_main/pi3_model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache
 ```
 
-Evaluation:
+### Evaluation
 
 - [x] Monocular Depth Estimation
 
@@ -71,7 +76,11 @@ compressed π3 (no LoRA finetuned):
 
 - [ ] Point Map Estimation
 
+### LoRA finetuning
 
+```bash
+CUDA_VISIBLE_DEVICES=0 taskset -c 30-40 python Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8.safetensors --data_path yahma/alpaca-cleaned --output_dir ./first_half --lora_target_modules q_u_proj,k_u_proj,v_u_proj,o_u_proj,gate_u_proj,down_u_proj,up_u_proj --lora_r 8 --num_epochs 3 --learning_rate 1e-4 --batch_size 4 --micro_batch_size 1 --cutoff_len 1024 --group_by_length
+```
 
 
 

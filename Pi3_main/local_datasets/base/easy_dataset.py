@@ -1,6 +1,6 @@
 
 import numpy as np
-from datasets.base.batched_sampler import BatchedRandomSampler
+from local_datasets.base.batched_sampler import BatchedRandomSampler
 
 
 class EasyDataset:

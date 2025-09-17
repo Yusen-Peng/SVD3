@@ -1,12 +1,12 @@
 import sys
 sys.path.append('.')
 
-from datasets.base.base_dataset import BaseDataset
+from local_datasets.base.base_dataset import BaseDataset
 import os
 import numpy as np
 import os.path as osp
 from PIL import Image
-from datasets.base.transforms import *
+from local_datasets.base.transforms import *
 import json
 from tqdm import tqdm
 

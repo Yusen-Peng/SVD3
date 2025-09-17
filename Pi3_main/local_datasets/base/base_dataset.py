@@ -1,4 +1,4 @@
-from datasets.base.easy_dataset import EasyDataset
+from local_datasets.base.easy_dataset import EasyDataset
 from pi3.utils.geometry import depthmap_to_absolute_camera_coordinates
 import numpy as np
 import os

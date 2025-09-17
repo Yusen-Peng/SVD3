@@ -126,7 +126,8 @@ class SVD_Pi3Attention(nn.Module):
 
         if not output_attentions:
             attn = None
-        return y, attn, new_past
+        #return y, attn, new_past
+        return y
 
 class SVD_Pi3MLP(nn.Module):
     """

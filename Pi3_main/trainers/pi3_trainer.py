@@ -1,17 +1,48 @@
 from trainers.base_trainer_accelerate import BaseTrainer
 from easydict import EasyDict
 import torch
-from datasets.base.base_dataset import sample_resolutions
+from local_datasets.base.base_dataset import sample_resolutions
 import hydra
 
 from pi3.models.loss import Pi3Loss
+from Pi3_LoRA_helper import build_pi3_with_lora
 
-class Pi3Trainer(BaseTrainer):
+class Pi3TrainerLoRA(BaseTrainer):
     def __init__(self, cfg):
         super().__init__(cfg)
 
         self.train_loss = hydra.utils.instantiate(cfg.loss.train_loss)
         self.test_loss = hydra.utils.instantiate(cfg.loss.train_loss)
+    
+    
+    def prepare_model(self):
+        """override to load a whitened Pi3 and wrap with LoRA"""
+        # Read LoRA config from Hydra cfg
+        phase = self.cfg.lora.phase   # "U", "V", or "NONE"
+        ckpt  = self.cfg.model.ckpt   # path to your whitened/merged checkpoint
+        r     = self.cfg.lora.r
+        alpha = self.cfg.lora.alpha
+        drop  = self.cfg.lora.dropout
+
+        model, info = build_pi3_with_lora(
+            ckpt_path=ckpt, device=self.accelerator.device,
+            phase=phase, r=r, alpha=alpha, dropout=drop
+        )
+        model.to(self.accelerator.device)
+        print("✅Loaded Pi3 with LoRA U config in the LoRA trainer:", info)
+
+
+        # set training dtype if you do mixed precision later via accelerate
+        if self.cfg.train.model_dtype == "fp16":
+            model.half()
+
+        # (optional) print trainable counts with PEFT
+        try:
+            model.print_trainable_parameters()
+        except Exception:
+            pass
+
+        return model
 
     def build_optimizer(self, cfg_optimizer, model):
         def param_group_fn(model_):

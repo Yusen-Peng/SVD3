@@ -1,7 +1,7 @@
 import sys
 sys.path.append('.')
 
-from datasets.base.base_dataset import BaseDataset
+from local_datasets.base.base_dataset import BaseDataset
 import os
 import numpy as np
 import os.path as osp
@@ -9,7 +9,7 @@ import h5py
 from utils.basic import seed_anything
 from PIL import Image
 from tqdm import tqdm
-from datasets.base.transforms import *
+from local_datasets.base.transforms import *
 
 def xyzqxqyqxqw_to_c2w(xyzqxqyqxqw):
     xyzqxqyqxqw = np.array(xyzqxqyqxqw, dtype=np.float32)

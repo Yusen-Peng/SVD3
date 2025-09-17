@@ -3,8 +3,8 @@ from .base.transforms import *
 from utils.misc import get_world_size, get_rank
 from torch.utils.data import DataLoader
 import hydra
-from datasets.base.base_dataset import sample_resolutions, unified_collate_fn
-from datasets.base.batched_sampler import DynamicBatchSampler, DynamicDistributedSampler
+from local_datasets.base.base_dataset import sample_resolutions, unified_collate_fn
+from local_datasets.base.batched_sampler import DynamicBatchSampler, DynamicDistributedSampler
 
 __HIGH_QUALITY_DATASETS__ = ['BlinkVision', 'Game', 'GameNew', 'DynamicStereo', 'FlyingThings3D', 'GTA-sfm', 'Hypersim', 'MatrixCity', 'MidAir', 'Monkaa', 'PointOdyssey', 'Sintel', 'Spring', 'TarTanAir', 'Unreal4k', 'VirtualKitti', 'Habitat']
 __MIDDLE_QUALITY_DATASETS__ = ['BlendedMVG', 'BlendedMVS', 'DTU', 'ETH3D', 'ScanNet', 'Scannetpp', 'Taskonomy']

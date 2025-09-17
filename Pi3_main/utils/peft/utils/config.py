@@ -37,7 +37,6 @@ class TaskType(str, enum.Enum):
     SEQ_2_SEQ_LM = "SEQ_2_SEQ_LM"
     CAUSAL_LM = "CAUSAL_LM"
     TOKEN_CLS = "TOKEN_CLS"
-    FEATURE_EXTRACTION = "FEATURE_EXTRACTION"  # add this for feature extraction (vision task)
 
 
 @dataclass
