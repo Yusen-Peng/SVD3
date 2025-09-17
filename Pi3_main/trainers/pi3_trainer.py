@@ -24,12 +24,12 @@ class Pi3TrainerLoRA(BaseTrainer):
         alpha = self.cfg.lora.alpha
         drop  = self.cfg.lora.dropout
 
-        model, info = build_pi3_with_lora(
+        model, _ = build_pi3_with_lora(
             ckpt_path=ckpt, device=self.accelerator.device,
             phase=phase, r=r, alpha=alpha, dropout=drop
         )
         model.to(self.accelerator.device)
-        print("✅Loaded Pi3 with LoRA U config in the LoRA trainer:", info)
+        print("✅Loaded Pi3 with LoRA U config in the LoRA trainer✅")
 
 
         # set training dtype if you do mixed precision later via accelerate

@@ -55,8 +55,13 @@ class BaseTrainer:
     def __init__(self, cfg):
         self.cfg = cfg
 
-        with open_dict(cfg):
-            cfg.job_logging_cfg = HydraConfig.get().job_logging
+        try:
+            with open_dict(cfg):
+                # using Hydra is optional
+                cfg.job_logging_cfg = HydraConfig.get().job_logging
+        except Exception:
+            pass
+
 
         # random seed
         if cfg.random_seed is None:
