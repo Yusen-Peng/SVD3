@@ -109,14 +109,14 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
             "gradient_accumulation_steps": max(1, args.micro_batch_size),
 
             "optimizer": {
+                "type": "AdamW",
                 "lr": args.learning_rate,
                 "encoder_lr": args.learning_rate,
                 "weight_decay": 0.01,
             },
             "lr_scheduler": {
-                "name": "cosine",
-                "warmup_steps": 100,
-                "total_steps": 0,  # filled by trainer after it knows dataloader length
+                "type": "CosineAnnealingLR",
+                "total_steps": 0,  # NOTE: just a placeholder, set by Pi3TrainerLoRA
             },
 
             "print_freq": 50,
@@ -125,6 +125,7 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
             "clip_loss": 1e4,
             "base_seed": 42,
             "find_unused_parameters": False,
+            "resume": None,
 
             # fields consumed by create_dataloader / samplers
             "iters_per_epoch": 0,             # 0 => use len(dataloader)
@@ -157,39 +158,41 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
         "test_dataloader":  {"drop_last": False, "shuffle": False},
 
         # === DATASETS ===
-        # If your dataset classes live under a different module, change _target_ accordingly.
         "train_dataset": {
-            "weights": {"Sintel": 1000},
-            "Sintel": {
-                "_target_": "datasets.sintel_dataset.SintelDataset",  # <-- adjust to your repo
-                "root_path": "/data/wanghaoxuan/sintel/training",
+            "weights": {"CO3DV2": 10000},
+            "CO3DV2": {
+                "_target_": "local_datasets.co3dv2_dataset.CO3DV2Dataset",
+                "data_root": "/data/wanghaoxuan/CO3Dv2_single_seq",
                 "frame_num": 8,
                 "mode": "train",
                 "aug_crop": 16,
                 "aug_focal": 0.9,
+                "resolution": [384, 384],
                 "transform": {
                     "_partial_": True,
-                    "_target_": "datasets.base.transforms.JitterJpegLossBlurring",  # <-- adjust if using local_datasets.*
+                    "_target_": "local_datasets.base.transforms.JitterJpegLossBlurring",
                 },
-                # "resolution": [[224, 224]],  # optionally pin a single res
             },
         },
         "test_dataset": {
-            "weights": {"Sintel": 200},
-            "Sintel": {
-                "_target_": "datasets.sintel_dataset.SintelDataset",  # <-- adjust to your repo
-                "root_path": "/data/wanghaoxuan/sintel/training",
+            "weights": {"CO3DV2": 10000},
+            "CO3DV2": {
+                "_target_": "local_datasets.co3dv2_dataset.CO3DV2Dataset",
+                "data_root": "/data/wanghaoxuan/CO3Dv2_single_seq",
                 "frame_num": 8,
-                "mode": "test",
+                "mode": "train",
+                "aug_crop": 16,
+                "aug_focal": 0.9,
+                "resolution": [518, 336],
                 "transform": {
                     "_partial_": True,
-                    "_target_": "datasets.base.transforms.ImgToTensor",  # <-- adjust if using local_datasets.*
+                    "_target_": "local_datasets.base.transforms.JitterJpegLossBlurring",
                 },
-                "resolution": [[224, 224]],
             },
         },
 
-        # Loss (make sure import path matches your tree)
+
+        # Loss function
         "loss": {
             "train_loss": {
                 "_target_": "pi3.models.loss.Pi3Loss",

@@ -62,7 +62,7 @@ class CO3DV2Dataset(BaseDataset):
     def __init__(
         self,
         data_root=None,
-        verbose=False,
+        verbose=True,
         mask_bg='rand',
         **kwargs
     ):
@@ -77,7 +77,7 @@ class CO3DV2Dataset(BaseDataset):
         assert mask_bg in (True, False, 'rand')
         self.mask_bg = mask_bg
 
-        if not os.path.exists(f'data/dataset_cache/co3dv2_{self.mode}_cache.npy'):
+        if not os.path.exists(f'/data/wanghaoxuan/dataset_cache/co3dv2_{self.mode}_cache.npy'):
             self.sequences = []
             self.num_image = {}
 
@@ -85,6 +85,9 @@ class CO3DV2Dataset(BaseDataset):
                 try:
                     annotation_path_train = osp.join(data_root, seq + '_train.jgz')
                     annotation_path_test = osp.join(data_root, seq + '_test.jgz')
+                    print(f'[{self.dataset_label}] Loading annotation for sequence {seq} ...', flush=True)
+                    print(f'annotation_path_train: {annotation_path_train}', flush=True)
+                    print(f'annotation_path_test: {annotation_path_test}', flush=True)
                     if self.mode == 'train':
                         with gzip.open(annotation_path_train, 'rt', encoding='utf-8') as f:
                             annotation = json.load(f)
@@ -92,16 +95,17 @@ class CO3DV2Dataset(BaseDataset):
                         with gzip.open(annotation_path_test, 'rt', encoding='utf-8') as f:
                             annotation = json.load(f)
                 except:
+                    print(f'⚠️⚠️⚠️[{self.dataset_label}] Warning: failed to load annotation for sequence {seq}, skipping.', flush=True)
                     continue
 
                 for sub_seq in annotation.keys():
                     self.num_image[(seq, sub_seq)] = len(annotation[sub_seq])
                     self.sequences.append((seq, sub_seq))
 
-            np.save(f'data/dataset_cache/co3dv2_{self.mode}_cache', dict(sequences=self.sequences, num_image=self.num_image))
+            np.save(f'/data/wanghaoxuan/dataset_cache/co3dv2_{self.mode}_cache', dict(sequences=self.sequences, num_image=self.num_image))
 
         else:
-            npy = np.load(f'data/dataset_cache/co3dv2_{self.mode}_cache.npy', allow_pickle=True).item()
+            npy = np.load(f'/data/wanghaoxuan/dataset_cache/co3dv2_{self.mode}_cache.npy', allow_pickle=True).item()
             self.sequences = npy['sequences']
             self.num_image = npy['num_image']
 
@@ -154,9 +158,20 @@ class CO3DV2Dataset(BaseDataset):
             # load image and depth
             rgb_image = np.array(Image.open(impath))
 
-            depthmap = Image.open(depthpath)
-            depthmap = np.frombuffer(np.array(depthmap, dtype=np.uint16), dtype=np.float16).astype(np.float32).reshape((depthmap.shape[0], depthmap.shape[1]))
+            # depthmap = Image.open(depthpath)
+            # depthmap = np.frombuffer(np.array(depthmap, dtype=np.uint16), dtype=np.float16).astype(np.float32).reshape((depthmap.shape[0], depthmap.shape[1]))
+            # depthmap = np.nan_to_num(depthmap, nan=0.0, posinf=0.0, neginf=0.0)
+
+            # Depth: read PIL -> ndarray (uint16) -> remember H,W -> reinterpret as float16 -> float32
+            dm_pil = Image.open(depthpath)
+            dm_u16 = np.array(dm_pil, dtype=np.uint16)          # (H, W) uint16 buffer
+            H, W = dm_u16.shape[:2]
+            depthmap = np.frombuffer(dm_u16.tobytes(), dtype=np.float16)  # reinterpret
+            depthmap = depthmap.reshape(H, W).astype(np.float32)
             depthmap = np.nan_to_num(depthmap, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+
 
             # load camera params
             camera_pose = np.eye(4)

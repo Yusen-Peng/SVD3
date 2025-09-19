@@ -24,14 +24,16 @@
   - [x] efficiency evaluation
     - [x] throughput (img/sec)
 - [ ] LoRA finetuning 
-  - [ ] LoRA experiment configuration [in progress!](Pi3_main/Pi3_LoRA_helper.py)
-    - [ ] dataset selection
+  - [ ] finetuning dataset
+    - [x] download CO3Dv2 dataset (single-sequence version: 88 sequences in total)
+    - [x] train/test split (manually implemented it)
+  - [ ] configure finetuning HPs
   - [ ] implement Pi3TrainerLoRA from Pi3Trainer [in progress!](Pi3_main/trainers/pi3_trainer.py)
     - [x] wrap CompressedPi3 with LoRA
 
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 taskset -c 30-40 python Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8.safetensors  --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05
+accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05
 ```
 
 ## 🔥 SVD-π3 Implementation details (commands + results)
