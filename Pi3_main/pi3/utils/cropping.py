@@ -16,7 +16,33 @@ except AttributeError:
     lanczos = PIL.Image.LANCZOS
     bicubic = PIL.Image.BICUBIC
 
-from utils.basic import colmap_to_opencv_intrinsics, opencv_to_colmap_intrinsics
+def colmap_to_opencv_intrinsics(K):
+    """
+    Modify camera intrinsics to follow a different convention.
+    Coordinates of the center of the top-left pixels are by default:
+    - (0.5, 0.5) in Colmap
+    - (0,0) in OpenCV
+    """
+    #K = K.copy()
+    K = np.asarray(K, dtype=np.float32).copy()
+    K[0, 2] -= 0.5
+    K[1, 2] -= 0.5
+    return K
+
+
+def opencv_to_colmap_intrinsics(K):
+    """
+    Modify camera intrinsics to follow a different convention.
+    Coordinates of the center of the top-left pixels are by default:
+    - (0.5, 0.5) in Colmap
+    - (0,0) in OpenCV
+    """
+    #K = K.copy()
+    K = np.asarray(K, dtype=np.float32).copy()
+    K[0, 2] += 0.5
+    K[1, 2] += 0.5
+    return K
+
 
 class ImageList:
     """ Convenience class to aply the same operation to a whole set of images.
@@ -154,6 +180,12 @@ def center_crop_image_depthmap(image, depthmap, camera_intrinsics, crop_scale, n
 
 
 def camera_matrix_of_crop(input_camera_matrix, input_resolution, output_resolution, scaling=1, offset_factor=0.5, offset=None):
+    # normalize to float32 early to avoid int64/float64 surprises
+    input_resolution  = np.asarray(input_resolution,  dtype=np.float32)
+    output_resolution = np.asarray(output_resolution, dtype=np.float32)
+    scaling = np.float32(scaling)
+    
+    
     # Margins to offset the origin
     margins = np.asarray(input_resolution) * scaling - output_resolution
     assert np.all(margins >= 0.0)
