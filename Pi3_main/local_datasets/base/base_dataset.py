@@ -1,3 +1,6 @@
+import traceback
+
+from flask import json
 from local_datasets.base.easy_dataset import EasyDataset
 from pi3.utils.geometry import depthmap_to_absolute_camera_coordinates
 import numpy as np
@@ -9,6 +12,74 @@ from omegaconf import OmegaConf
 from .transforms import *
 import pandas as pd
 from .utils import *
+
+def _sanitize_depth(dm):
+    dm = np.asarray(dm)
+    if dm.dtype == np.uint16:           # mm → m
+        dm = dm.astype(np.float32) / 1000.0
+    else:
+        dm = dm.astype(np.float32)
+    dm[~np.isfinite(dm)] = 0.0
+    return dm
+
+def _inpaint_depth(dm, valid, iters=30):
+    """Very fast 4-neighbor Jacobi smoothing on invalid pixels only."""
+    dm = dm.copy()
+    invalid = ~valid
+    if invalid.sum() == 0:
+        return dm
+    # seed invalids with border-mean to start (avoid zeros)
+    seed = np.nanmean(np.where(valid, dm, np.nan))
+    if not np.isfinite(seed): seed = 1.5
+    dm[invalid] = seed
+    for _ in range(iters):
+        # 4-neighbor average
+        avg = (
+            np.roll(dm, 1, 0) + np.roll(dm, -1, 0) +
+            np.roll(dm, 1, 1) + np.roll(dm, -1, 1)
+        ) * 0.25
+        dm[invalid] = avg[invalid]
+    return dm
+
+def _depth_stats(dm):
+    v = np.isfinite(dm) & (dm > 1e-6)
+    return v.mean(), (float(dm[v].min()) if v.any() else 0.0), (float(dm[v].max()) if v.any() else 0.0)
+
+def synthesize_depth_if_needed(
+    view,
+    scene_key=None,
+    fixed_backup=3.0,         # meters, last-resort constant plane
+    dataset_prior=None,       # dict-like with "global_median"
+    scene_priors=None,        # dict mapping scene_key -> median depth
+):
+    """
+    Ensures view['depthmap'] becomes usable. Returns (depthmap, was_synthesized: bool).
+    """
+    dm = _sanitize_depth(view['depthmap'])
+    valid = (dm > 1e-6) & np.isfinite(dm)
+    ratio, dmin, dmax = _depth_stats(dm)
+
+    if ratio == 0.0:
+        # Case 3: totally empty -> try scene prior, then global prior, else constant
+        if scene_key and scene_priors and scene_key in scene_priors:
+            median_d = scene_priors[scene_key]
+        elif dataset_prior and ("global_median" in dataset_prior) and np.isfinite(dataset_prior["global_median"]):
+            median_d = float(dataset_prior["global_median"])
+        else:
+            median_d = fixed_backup
+        dm = np.full_like(dm, median_d, dtype=np.float32)
+        return dm, True
+    return dm.astype(np.float32), False
+
+
+def _has_valid_depth(dm: np.ndarray, z_near: float = 1e-6) -> bool:
+    dm = np.asarray(dm)
+    if dm.dtype == np.uint16:
+        dm = dm.astype(np.float32) / 1000.0
+    else:
+        dm = dm.astype(np.float32)
+    dm[~np.isfinite(dm)] = 0.0
+    return bool((dm > z_near).any())
 
 class BaseDataset(EasyDataset):
     def __init__(
@@ -175,10 +246,9 @@ class BaseDataset(EasyDataset):
 
         other = [x for x in [normal, far_mask] if x is not None]
         return image, depthmap, intrinsics2, *other
-    
+
     def __getitem__(self, idx):
         if isinstance(idx, tuple):
-            # the idx is specifying the aspect-ratio
             if len(idx) == 3:
                 idx, ar_idx, frame_num = idx
                 self.frame_num = frame_num
@@ -188,92 +258,87 @@ class BaseDataset(EasyDataset):
             assert len(self._resolutions) == 1
             ar_idx = 0
 
-        # over-loaded code
-        resolution = self._resolutions[ar_idx]  # DO NOT CHANGE THIS (compatible with BatchedRandomSampler)
-        
+        resolution = self._resolutions[ar_idx]  # DO NOT CHANGE THIS
         error = None
-        for _ in range(10):              # default: 3
+        for _ in range(10):  # retry budget
             try:
                 views = self._get_views(idx, resolution, self._rng)
 
-                # assert len(views) == self.frame_num
                 if self.shuffle:
                     self._rng.shuffle(views)
 
-                # check data-types
-                for v, view in enumerate(views):
-                    assert 'pts3d' not in view, f"pts3d should not be there, they will be computed afterwards based on intrinsics+depthmap for view {view_name(view)}"
-                    view['idx'] = (idx, ar_idx, v)
-                    # view['idx'] = (idx, v)
+                processed = []
+                for raw_v, view in enumerate(views):
+                    # build a stable scene key
+                    scene_key = (view.get('dataset', ''), view.get('label', ''))
 
-                    # encode the image
-                    width, height = view['img'].size
-                    view['true_shape'] = np.int32((height, width))
+                    # synthesize if needed (or inpaint holes)
+                    dm_fixed, synthesized = synthesize_depth_if_needed(
+                        view,
+                        scene_key=scene_key,
+                        fixed_backup=3.0
+                    )
+                    view['depthmap'] = dm_fixed
+                    view['depth_source'] = 'synthetic' if synthesized else 'original'
 
+                    # proceed as usual, strictly
+                    assert 'pts3d' not in view, "pts3d should not be present yet"
+                    view['idx'] = (idx, ar_idx, len(processed))
+                    w, h = view['img'].size
+                    view['true_shape'] = np.int32((h, w))
                     assert 'camera_intrinsics' in view
                     if 'camera_pose' not in view:
-                        view['camera_pose'] = np.full((4, 4), np.nan, dtype=np.float32)
+                        view['camera_pose'] = np.full((4,4), np.nan, dtype=np.float32)
                     else:
-                        assert np.isfinite(view['camera_pose']).all(), f'NaN in camera pose for view {view_name(view)}'
-                    assert 'pts3d' not in view
-                    assert 'valid_mask' not in view
-                    assert np.isfinite(view['depthmap']).all(), f'NaN in depthmap for view {view_name(view)}'
+                        assert np.isfinite(view['camera_pose']).all(), f'NaN in camera pose for {view_name(view)}'
+                    assert np.isfinite(view['depthmap']).all(), f'NaN in depthmap for {view_name(view)}'
+
                     view['z_far'] = self.z_far
                     pts3d, valid_mask = depthmap_to_absolute_camera_coordinates(**view)
+                    geom_valid = valid_mask & np.isfinite(pts3d).all(axis=-1)
+                    if geom_valid.sum() == 0:
+                        # If even the synthesized depth can't produce valid 3D, skip this view
+                        continue
 
                     view['pts3d'] = pts3d
-                    view['valid_mask'] = valid_mask & np.isfinite(pts3d).all(axis=-1)
-
-                    view['depthmap'][~view['valid_mask']] = 0.0
-
-                    assert view['valid_mask'].sum() > 0
-
+                    view['valid_mask'] = geom_valid
+                    view['depthmap'][~geom_valid] = 0.0
                     if 'normal' not in view:
                         view['normal'] = None
 
-                    # # check all datatypes
-                    # for key, val in view.items():
-                    #     res, err_msg = is_good_type(key, val)
-                    #     assert res, f"{err_msg} with {key}={val} for view {view_name(view)}"
-                    # K = view['camera_intrinsics']
+                    processed.append(view)
+                    if len(processed) == self.frame_num:
+                        break
 
-                for view in views:
+                # If not enough valid views, resample (continue)
+                if len(processed) < self.frame_num:
+                    continue
+
+                # Optional: trim to exactly frame_num (in case _get_views returned >frame_num valids)
+                processed = processed[:self.frame_num]
+
+                # 4) apply transforms only to the finalized, valid views
+                for view in processed:
                     view['img'] = self.transform(view['img'])
 
-                # # last thing done!
-                # for view in views:
-                #     # transpose to make sure all views are the same size
-                #     # transpose_to_landscape(view)  # NOTE: Here we don't care about portrait image.
-                #     # this allows to check whether the RNG is is the same state each time
-                #     view['rng'] = int.from_bytes(self._rng.bytes(4), 'big')
-
-                # overlap = self.check_overlap(views)
-
-                # if overlap is False:
-                #     raise ValueError("Views are not overlapped!")
+                # success
+                return processed
 
             except Exception as e:
-                views = None
+                import traceback
+                tb = traceback.format_exc()
                 if hasattr(self, 'this_views_info'):
-                    print(
-                        f"Failed to load data from {self.dataset_label}-{idx} ({self.this_views_info}) for error {e}.", flush=True
-                    )
+                    print(f"Failed to load data from {self.dataset_label}-{idx} ({self.this_views_info}) "
+                        f"for error {type(e).__name__}: {e}\n{tb}", flush=True)
                 else:
-                    print(
-                        f"Failed to load data from {self.dataset_label}-{idx} for error {e}.", flush=True
-                    )
+                    print(f"Failed to load data from {self.dataset_label}-{idx} "
+                        f"for error {type(e).__name__}: {e}\n{tb}", flush=True)
                 idx = np.random.randint(0, len(self))
                 error = e
-            
-            if views is not None:
-                error = None
-                break
 
-        if views is None:
-            raise error
-        
-        return views
-    
+        # exhausted retries
+        raise error
+
     def load_cache(self, cache_file):
         try:
             data = np.load(cache_file, allow_pickle=True).item()

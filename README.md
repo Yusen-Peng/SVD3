@@ -10,12 +10,12 @@
   - [x] collect calibration data
     - [x] sintel_training_ALLMODS_512_224_8_10_3.pt (64 batches, 512 images)
   - [x] derive the whitening matrix via profiling 
-    - [x] fallback to EVD when Cholesky fails ("✅95/144 succeeded with Cholesky, 49/144 used EVD fallback")
+    - [x] **fallback to EVD when Cholesky fails ("✅95/144 succeeded with Cholesky, 49/144 used EVD fallback")**
   - [x] apply whitening
     - [x] SVD_Pi3Attention
     - [x] SVD_Pi3MLP
     - [x] Pi3_whitening
-      - [x] hierarchical attempts on SVD (float32 GPU -> float64 GPU -> float64 CPU)
+      - [x] **hierarchical attempts on SVD (float32 GPU -> float64 GPU -> float64 CPU)**
 - [x] evaluation
   - [x] performance/accuracy evaluation (for now, focus on depth estimation)
     - [x] in order to load checkpoints, implement a CompressedPi3 that inherits Pi3 
@@ -23,13 +23,38 @@
     - [x] run evaluation
   - [x] efficiency evaluation
     - [x] throughput (img/sec)
-- [ ] LoRA finetuning 
-  - [ ] finetuning dataset
+- [ ] LoRA finetuning
+  - [x] implement Pi3TrainerLoRA from Pi3Trainer [Pi3_main/trainers/pi3_trainer.py](Pi3_main/trainers/pi3_trainer.py)
+      - [x] wrap CompressedPi3 with LoRA
+  - [x] configure finetuning hyperparameters in [Pi3_main/Pi3_LoRA_helper.py](Pi3_main/Pi3_LoRA_helper.py)
+  - [x] dataset preparation
     - [x] download CO3Dv2 dataset (single-sequence version: 88 sequences in total)
-    - [x] train/test split (manually implemented it)
-  - [ ] configure finetuning HPs
-  - [ ] implement Pi3TrainerLoRA from Pi3Trainer [in progress!](Pi3_main/trainers/pi3_trainer.py)
-    - [x] wrap CompressedPi3 with LoRA
+    - [x] train/test split (manual implementation)
+    - [x] sometimes depth map is all zeros (I make constant/dummy depth map accordingly)
+
+Sample finetuning data:
+```csharp
+{'img': <PIL.Image.Image image mode=RGB size=224x224 at 0x7FD0EA5A85B0>, 'depthmap': array([[7.3085938, 0.       , 0.       , ..., 0.       , 0.       ,
+        0.       ],
+       [7.5234375, 0.       , 0.       , ..., 0.       , 0.       ,
+        0.       ],
+       [6.8984375, 0.       , 0.       , ..., 0.       , 0.       ,
+        0.       ],
+       ...,
+       [9.3046875, 9.3046875, 9.3046875, ..., 9.21875  , 9.21875  ,
+        9.2265625],
+       [9.2890625, 9.2890625, 9.2890625, ..., 9.203125 , 9.203125 ,
+        9.2109375],
+       [9.265625 , 9.28125  , 9.28125  , ..., 9.1875   , 9.1875   ,
+        9.1875   ]], dtype=float32), 'camera_pose': array([[-1., -0., -0., -0.],
+       [-0., -1., -0., -0.],
+       [ 0.,  0.,  1.,  0.],
+       [ 0.,  0.,  0.,  1.]], dtype=float32), 'camera_intrinsics': array([[126.97792,   0.     , 111.68296],
+       [  0.     , 126.97792, 111.68297],
+       [  0.     ,   0.     ,   1.     ]], dtype=float32), 'dataset': 'COD3DV2', 'label': 'toytrain-240_25394_51994', 'instance': 'frame000008.jpg'}
+```
+  - [ ] LoRA Training 
+    - [ ] in progress (lora on W'u, W'v, respectively...)
 
 
 ```bash

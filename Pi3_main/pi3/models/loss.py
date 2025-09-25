@@ -4,7 +4,7 @@ import torch.nn as nn
 from typing import *
 import math
 
-from ..utils.geometry import homogenize_points, se3_inverse, depth_edge
+from ..utils.geometry import homogenize_points, se3_inverse, depth_edge, se3_inverse_advanced
 from ..utils.alignment import align_points_scale
 
 from local_datasets import __HIGH_QUALITY_DATASETS__, __MIDDLE_QUALITY_DATASETS__
@@ -210,8 +210,10 @@ class CameraLoss(nn.Module):
         pred_pose_align = pred_pose.clone()
         pred_pose_align[..., :3, 3] *=  scale.view(B, 1, 1)
         
-        pred_w2c = se3_inverse(pred_pose_align)
-        gt_w2c = se3_inverse(gt_pose)
+        # pred_w2c = se3_inverse(pred_pose_align)
+        # gt_w2c = se3_inverse(gt_pose)
+        pred_w2c = se3_inverse_advanced(pred_pose_align)
+        gt_w2c = se3_inverse_advanced(gt_pose)
         
         pred_w2c_exp = pred_w2c.unsqueeze(2)
         pred_pose_exp = pred_pose_align.unsqueeze(1)
@@ -279,7 +281,10 @@ class Pi3Loss(nn.Module):
             gt_pts[valid_batch] = gt_pts[valid_batch] / norm_factor[..., None, None, None, None]
             poses[valid_batch, ..., :3, 3] /= norm_factor[..., None, None]
 
-        extrinsics = se3_inverse(poses)
+
+        #extrinsics = se3_inverse(poses)
+        extrinsics = se3_inverse_advanced(poses)
+
         gt_local_pts = torch.einsum('bnij, bnhwj -> bnhwi', extrinsics, homogenize_points(gt_pts))[..., :3]
         
         dataset_names = gt[0]['dataset']

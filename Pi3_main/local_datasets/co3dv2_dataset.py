@@ -193,7 +193,16 @@ class CO3DV2Dataset(BaseDataset):
             if mask_bg:
                 # load object mask
                 maskpath = impath.replace('/images/', '/masks/').replace('.jpg', '.png')
-                maskmap = Image.open(maskpath).astype(np.float32)
+                
+                # FIXME: type mismatch
+                #####################################################
+                #maskmap = Image.open(maskpath).astype(np.float32)
+                with Image.open(maskpath) as im:
+                    # choose a mode that matches how you use mask later
+                    im = im.convert("L")  # 8-bit grayscale (common for masks)
+                    maskmap = np.array(im, dtype=np.float32)   # H x W, float32
+                #####################################################
+                
                 maskmap = (maskmap / 255.0) > 0.1
 
                 # update the depthmap with mask

@@ -235,8 +235,8 @@ class CompressedPi3(Pi3):
     """
 
     def __init__(self, pos_type='rope100', decoder_size='large'):
+        # NOTE: We keep encoder, camera/point heads, etc. exactly as in Pi3.
         super().__init__(pos_type=pos_type, decoder_size=decoder_size)
-        # We keep encoder, camera/point heads, etc. exactly as in Pi3.
 
     def _wrap_decoder_with_svd(self):
         """Replace each decoder block's attn/mlp with SVD-aware modules."""

@@ -120,7 +120,7 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
             },
 
             "print_freq": 50,
-            "model_dtype": "fp16",        # "no", "fp16", or "bf16"
+            "model_dtype": "fp32",              # "fp16" or "fp32"; set to "fp32" to avoid instabilities
             "clip_grad": 1.0,
             "clip_loss": 1e4,
             "base_seed": 42,
@@ -167,7 +167,7 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
                 "mode": "train",
                 "aug_crop": 16,
                 "aug_focal": 0.9,
-                "resolution": [384, 384],
+                "resolution": [224, 224],
                 "transform": {
                     "_partial_": True,
                     "_target_": "local_datasets.base.transforms.JitterJpegLossBlurring",

@@ -2,6 +2,81 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 
+def se3_inverse_advanced(T):
+    """
+    Invert SE(3) transforms with arbitrary leading batch dims.
+    Accepts (..., 4, 4) homogeneous or (..., 3, 4) [R|t].
+    Returns a tensor/ndarray with the same trailing shape as input.
+    """
+    is_np = isinstance(T, np.ndarray)
+
+    # ---- helpers for torch / numpy parity ----
+    def transpose_last2(x):
+        return x.swapaxes(-2, -1) if is_np else x.transpose(-1, -2)
+
+    def matmul(a, b):
+        return a @ b
+
+    def zeros_like_shape(shape, ref):
+        if is_np:
+            return np.zeros(shape, dtype=ref.dtype)
+        else:
+            return torch.zeros(shape, dtype=ref.dtype, device=ref.device)
+
+    def eye(n, ref):
+        if is_np:
+            I = np.zeros((n, n), dtype=ref.dtype)
+            np.fill_diagonal(I, 1)
+            return I
+        else:
+            return torch.eye(n, dtype=ref.dtype, device=ref.device)
+
+    # ---- normalize shape: allow (4,4) or (3,4) by adding a dummy batch ----
+    squeeze_back = False
+    if T.ndim == 2:  # (4,4) or (3,4)
+        T = T[None, ...]
+        squeeze_back = True
+
+    # ---- branch by trailing shape ----
+    if T.shape[-2:] == (4, 4):
+        R = T[..., :3, :3]
+        t = T[..., :3, 3][..., None]          # (..., 3, 1)
+
+        R_inv = transpose_last2(R)            # (..., 3, 3)
+        t_inv = -matmul(R_inv, t)             # (..., 3, 1)
+
+        T_inv = zeros_like_shape(T.shape, T)  # (..., 4, 4)
+        T_inv[..., :3, :3] = R_inv
+        T_inv[..., :3, 3]  = t_inv[..., 0]
+        # set last row to [0,0,0,1]
+        if is_np:
+            T_inv[..., 3, :] = 0
+            T_inv[..., 3, 3] = 1
+        else:
+            T_inv[..., 3, :].zero_()
+            T_inv[..., 3, 3].fill_(1)
+
+    elif T.shape[-2:] == (3, 4):
+        R = T[..., :3, :3]
+        t = T[..., :3, 3][..., None]          # (..., 3, 1)
+
+        R_inv = transpose_last2(R)            # (..., 3, 3)
+        t_inv = -matmul(R_inv, t)             # (..., 3, 1)
+
+        if is_np:
+            T_inv = np.concatenate([R_inv, t_inv], axis=-1)  # (..., 3, 4)
+        else:
+            T_inv = torch.cat([R_inv, t_inv], dim=-1)        # (..., 3, 4)
+
+    else:
+        raise ValueError(f"se3_inverse expects (...,4,4) or (...,3,4); got {T.shape}")
+
+    if squeeze_back:
+        T_inv = T_inv[0]
+    return T_inv
+
+
+
 def se3_inverse(T):
     """
     Computes the inverse of a batch of SE(3) matrices.
