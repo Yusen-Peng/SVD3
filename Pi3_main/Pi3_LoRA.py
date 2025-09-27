@@ -14,7 +14,8 @@ import hydra
 import torch
 import transformers
 from datasets import load_dataset
-from safetensors.torch import load_file
+from safetensors.torch import load_file, save_file
+from accelerate import Accelerator
 
 parent_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_path)
@@ -32,10 +33,12 @@ def run_phase(args, phase, ckpt_in, out_dir):
     trainer = Pi3TrainerLoRA(cfg)
     trainer.train()
     # merge for next phase
-    merged_path = os.path.join(cfg["log"]["ckpt_dir"], f"merged_{phase}.pt")
-    if hasattr(trainer.model, "merge_and_unload"):
-        merged = trainer.model.merge_and_unload()
-        torch.save(merged.state_dict(), merged_path)
+    merged_path = f"/data/wanghaoxuan/SVD_Pi3_cache/Pi3_lora_{phase}_0.8.safetensors"
+
+    # save the model using accelerate
+    accelerator = Accelerator()
+    state_dict = accelerator.get_state_dict(trainer.model)
+    save_file(state_dict, merged_path)
     return merged_path
 
 def main():
@@ -50,8 +53,10 @@ def main():
     p.add_argument('--lora_dropout', type=float, default=0.05)
     args = p.parse_args()
 
-    # U then V
-    ckpt_u = run_phase(args, "U", args.prune_model, "./first_half")
+    # lora on U, then on V
+
+    #ckpt_u = run_phase(args, "U", args.prune_model, "./first_half")
+    ckpt_u = "/data/wanghaoxuan/SVD_Pi3_cache/Pi3_lora_U_0.8.safetensors"
     _      = run_phase(args, "V", ckpt_u, "./second_half")
 
 if __name__ == "__main__":

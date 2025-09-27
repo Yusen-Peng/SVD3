@@ -28,7 +28,7 @@ def main(hydra_cfg: DictConfig):
     pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/monodepth.yaml
 
     # 0. create model
-    COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() else False
+    COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() else False
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
     sd = load_file(ckpt, device=str(device))

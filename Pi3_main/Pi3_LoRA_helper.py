@@ -95,7 +95,7 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
             "ckpt": ckpt_path,  # used by Pi3TrainerLoRA.prepare_model -> build_pi3_with_lora
         },
         "lora": {
-            "phase": phase,                 # "U" then "V"
+            "phase": phase,                 # "U" then "V", two steps of sequential
             "r": args.lora_r,
             "alpha": args.lora_alpha,
             "dropout": args.lora_dropout,
@@ -139,8 +139,8 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
             "num_workers": 8,                 # used below by create_dataloader
         },
         "test": {
-            "batch_size": 2,
-            "num_workers": 4,
+            "batch_size": args.batch_size,
+            "num_workers": 8,
             "iters_per_test": 0,
         },
 
@@ -180,10 +180,10 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
                 "_target_": "local_datasets.co3dv2_dataset.CO3DV2Dataset",
                 "data_root": "/data/wanghaoxuan/CO3Dv2_single_seq",
                 "frame_num": 8,
-                "mode": "train",
+                "mode": "test",
                 "aug_crop": 16,
                 "aug_focal": 0.9,
-                "resolution": [518, 336],
+                "resolution": [224, 244], # subject to change
                 "transform": {
                     "_partial_": True,
                     "_target_": "local_datasets.base.transforms.JitterJpegLossBlurring",

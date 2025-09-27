@@ -291,9 +291,13 @@ class BaseTrainer:
 
         self.log_info(f"Start validation for epoch {epoch}")
         with torch.no_grad():
-            for batch in metric_logger.log_every(
+            for it, batch in enumerate(metric_logger.log_every(
                 self.test_loader, self.cfg.train.print_freq, header
-            ):
+            )):
+                
+                if it >= self.iters_per_epoch:
+                    break
+
                 batch = move_to_device(batch, self.accelerator.device)
 
                 # Forward pass

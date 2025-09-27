@@ -158,9 +158,6 @@ class CO3DV2Dataset(BaseDataset):
             # load image and depth
             rgb_image = np.array(Image.open(impath))
 
-            # depthmap = Image.open(depthpath)
-            # depthmap = np.frombuffer(np.array(depthmap, dtype=np.uint16), dtype=np.float16).astype(np.float32).reshape((depthmap.shape[0], depthmap.shape[1]))
-            # depthmap = np.nan_to_num(depthmap, nan=0.0, posinf=0.0, neginf=0.0)
 
             # Depth: read PIL -> ndarray (uint16) -> remember H,W -> reinterpret as float16 -> float32
             dm_pil = Image.open(depthpath)
@@ -193,15 +190,11 @@ class CO3DV2Dataset(BaseDataset):
             if mask_bg:
                 # load object mask
                 maskpath = impath.replace('/images/', '/masks/').replace('.jpg', '.png')
-                
-                # FIXME: type mismatch
-                #####################################################
-                #maskmap = Image.open(maskpath).astype(np.float32)
+            
                 with Image.open(maskpath) as im:
                     # choose a mode that matches how you use mask later
                     im = im.convert("L")  # 8-bit grayscale (common for masks)
                     maskmap = np.array(im, dtype=np.float32)   # H x W, float32
-                #####################################################
                 
                 maskmap = (maskmap / 255.0) > 0.1
 
