@@ -33,7 +33,7 @@ def run_phase(args, phase, ckpt_in, out_dir):
     trainer = Pi3TrainerLoRA(cfg)
     trainer.train()
     # merge for next phase
-    merged_path = f"/data/wanghaoxuan/SVD_Pi3_cache/Pi3_lora_{phase}_0.8.safetensors"
+    merged_path = f"/data/wanghaoxuan/SVD_Pi3_cache/LoRA/Pi3_lora_{phase}_0.8.safetensors"
 
     # save the model using accelerate
     accelerator = Accelerator()
@@ -55,9 +55,8 @@ def main():
 
     # lora on U, then on V
 
-    #ckpt_u = run_phase(args, "U", args.prune_model, "./first_half")
-    ckpt_u = "/data/wanghaoxuan/SVD_Pi3_cache/Pi3_lora_U_0.8.safetensors"
-    _      = run_phase(args, "V", ckpt_u, "./second_half")
+    ckpt_u = run_phase(args, "U", args.prune_model, "/data/wanghaoxuan/SVD_Pi3_cache/first_half")
+    _      = run_phase(args, "V", ckpt_u, "/data/wanghaoxuan/SVD_Pi3_cache/second_half")
 
 if __name__ == "__main__":
     main()

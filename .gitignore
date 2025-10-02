@@ -165,4 +165,6 @@ SVD-LLM/second_half/*
 outputs/*
 first_half/*
 second_half/*
+first_half_legacy/*
+second_half_legacy/*
 tmp/*

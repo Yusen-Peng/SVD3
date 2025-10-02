@@ -40,203 +40,203 @@ def sync():
         torch.cuda.synchronize()
 
 
-def simple_efficiency(model, imgs, dtype):
-    with torch.no_grad():
-        with torch.amp.autocast('cuda', dtype=dtype):
-            sync()
-            start = torch.cuda.Event(enable_timing=True)
-            end = torch.cuda.Event(enable_timing=True)
-            start.record()
-            res = model(imgs[None])
-            end.record()
-            torch.cuda.synchronize()
-            model_ms = start.elapsed_time(end)  # milliseconds
-    print(f"✅Model forward: {model_ms:.2f} ms")
-    fps = (imgs.shape[0] / (model_ms / 1000.0))
-    print(f"✅Throughput: {fps:.2f} frames/sec")
-    return res
+# def simple_efficiency(model, imgs, dtype):
+#     with torch.no_grad():
+#         with torch.amp.autocast('cuda', dtype=dtype):
+#             sync()
+#             start = torch.cuda.Event(enable_timing=True)
+#             end = torch.cuda.Event(enable_timing=True)
+#             start.record()
+#             res = model(imgs[None])
+#             end.record()
+#             torch.cuda.synchronize()
+#             model_ms = start.elapsed_time(end)  # milliseconds
+#     print(f"✅Model forward: {model_ms:.2f} ms")
+#     fps = (imgs.shape[0] / (model_ms / 1000.0))
+#     print(f"✅Throughput: {fps:.2f} frames/sec")
+#     return res
 
-def profiler_efficiency(model, imgs, dtype, csv_path="profile.csv"):
-    with prof.profile(
-        activities=[prof.ProfilerActivity.CPU, prof.ProfilerActivity.CUDA],
-        record_shapes=True,
-        profile_memory=True,
-        with_stack=False
-    ) as p:
-        with torch.no_grad(), torch.amp.autocast('cuda', dtype=dtype):
-            res = model(imgs[None])
+# def profiler_efficiency(model, imgs, dtype, csv_path="profile.csv"):
+#     with prof.profile(
+#         activities=[prof.ProfilerActivity.CPU, prof.ProfilerActivity.CUDA],
+#         record_shapes=True,
+#         profile_memory=True,
+#         with_stack=False
+#     ) as p:
+#         with torch.no_grad(), torch.amp.autocast('cuda', dtype=dtype):
+#             res = model(imgs[None])
 
-    # Collect key averages
-    events = p.key_averages()
+#     # Collect key averages
+#     events = p.key_averages()
 
-    # Write to CSV
-    with open(csv_path, "w", newline="") as f:
-        writer = csv.writer(f)
-        # header
-        writer.writerow([
-            "Name",
-            "CPU time total (us)",
-            "CUDA time total (us)",
-            "Calls",
-            "Input shapes",
-            "Self CPU Mem (KB)",
-            "Self CUDA Mem (KB)"
-        ])
-        # rows
-        for evt in events:
-            writer.writerow([
-                evt.key,
-                evt.cpu_time_total,
-                evt.cuda_time_total,
-                evt.count,
-                evt.input_shapes,
-                evt.self_cpu_memory_usage / 1024,
-                evt.self_cuda_memory_usage / 1024
-            ])
+#     # Write to CSV
+#     with open(csv_path, "w", newline="") as f:
+#         writer = csv.writer(f)
+#         # header
+#         writer.writerow([
+#             "Name",
+#             "CPU time total (us)",
+#             "CUDA time total (us)",
+#             "Calls",
+#             "Input shapes",
+#             "Self CPU Mem (KB)",
+#             "Self CUDA Mem (KB)"
+#         ])
+#         # rows
+#         for evt in events:
+#             writer.writerow([
+#                 evt.key,
+#                 evt.cpu_time_total,
+#                 evt.cuda_time_total,
+#                 evt.count,
+#                 evt.input_shapes,
+#                 evt.self_cpu_memory_usage / 1024,
+#                 evt.self_cuda_memory_usage / 1024
+#             ])
 
-    print(f"✅Profiler results written to {csv_path}")
-    return res
+#     print(f"✅Profiler results written to {csv_path}")
+#     return res
 
-def build_profiler_plots(
-    csv_path: str = "profile.csv",
-    html_path: str = "topk_cuda_ops.html",
-    png_path: str = "topk_cuda_ops.png",
-    top_k: int = 10,
-):
-    """
-    Build an interactive horizontal bar chart of the Top-K ops by CUDA time total.
-    Saves an interactive HTML and (if kaleido is available) a static PNG.
+# def build_profiler_plots(
+#     csv_path: str = "profile.csv",
+#     html_path: str = "topk_cuda_ops.html",
+#     png_path: str = "topk_cuda_ops.png",
+#     top_k: int = 10,
+# ):
+#     """
+#     Build an interactive horizontal bar chart of the Top-K ops by CUDA time total.
+#     Saves an interactive HTML and (if kaleido is available) a static PNG.
 
-    Parameters
-    ----------
-    csv_path : str
-        Path to the CSV produced by `profiler_efficiency`.
-    html_path : str
-        Output path for the interactive HTML.
-    png_path : str
-        Output path for the static PNG; requires `kaleido` installed.
-    top_k : int
-        Number of top ops to display, ranked by CUDA time total (ms).
+#     Parameters
+#     ----------
+#     csv_path : str
+#         Path to the CSV produced by `profiler_efficiency`.
+#     html_path : str
+#         Output path for the interactive HTML.
+#     png_path : str
+#         Output path for the static PNG; requires `kaleido` installed.
+#     top_k : int
+#         Number of top ops to display, ranked by CUDA time total (ms).
 
-    Returns
-    -------
-    pd.DataFrame
-        The top-K dataframe used for plotting (sorted by CUDA time).
-    """
-    if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"CSV not found: {csv_path}")
+#     Returns
+#     -------
+#     pd.DataFrame
+#         The top-K dataframe used for plotting (sorted by CUDA time).
+#     """
+#     if not os.path.exists(csv_path):
+#         raise FileNotFoundError(f"CSV not found: {csv_path}")
 
-    # Read and coerce numeric columns
-    df = pd.read_csv(csv_path)
+#     # Read and coerce numeric columns
+#     df = pd.read_csv(csv_path)
 
-    # Standardize column names in case of minor variations
-    col_map = {
-        "Name": "Name",
-        "CPU time total (us)": "CPU_us",
-        "CUDA time total (us)": "CUDA_us",
-        "Calls": "Calls",
-        "Input shapes": "Input shapes",
-        "Self CPU Mem (KB)": "Self CPU Mem (KB)",
-        "Self CUDA Mem (KB)": "Self CUDA Mem (KB)",
-    }
-    # Ensure all expected columns exist
-    for k in col_map:
-        if k not in df.columns:
-            raise ValueError(f"Expected column '{k}' not found in {csv_path}")
+#     # Standardize column names in case of minor variations
+#     col_map = {
+#         "Name": "Name",
+#         "CPU time total (us)": "CPU_us",
+#         "CUDA time total (us)": "CUDA_us",
+#         "Calls": "Calls",
+#         "Input shapes": "Input shapes",
+#         "Self CPU Mem (KB)": "Self CPU Mem (KB)",
+#         "Self CUDA Mem (KB)": "Self CUDA Mem (KB)",
+#     }
+#     # Ensure all expected columns exist
+#     for k in col_map:
+#         if k not in df.columns:
+#             raise ValueError(f"Expected column '{k}' not found in {csv_path}")
 
-    df = df.rename(columns=col_map)
+#     df = df.rename(columns=col_map)
 
-    # Coerce numerics
-    for c in ["CPU_us", "CUDA_us", "Calls", "Self CPU Mem (KB)", "Self CUDA Mem (KB)"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+#     # Coerce numerics
+#     for c in ["CPU_us", "CUDA_us", "Calls", "Self CPU Mem (KB)", "Self CUDA Mem (KB)"]:
+#         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
-    # Aggregate by op Name (multiple entries can occur across shapes/threads)
-    agg = (
-        df.groupby("Name", as_index=False)
-          .agg({
-              "CPU_us": "sum",
-              "CUDA_us": "sum",
-              "Calls": "sum",
-              "Self CPU Mem (KB)": "sum",
-              "Self CUDA Mem (KB)": "sum",
-              "Input shapes": lambda s: "; ".join(sorted(map(str, set(s))))
-          })
-    )
+#     # Aggregate by op Name (multiple entries can occur across shapes/threads)
+#     agg = (
+#         df.groupby("Name", as_index=False)
+#           .agg({
+#               "CPU_us": "sum",
+#               "CUDA_us": "sum",
+#               "Calls": "sum",
+#               "Self CPU Mem (KB)": "sum",
+#               "Self CUDA Mem (KB)": "sum",
+#               "Input shapes": lambda s: "; ".join(sorted(map(str, set(s))))
+#           })
+#     )
 
-    # Derived metrics (ms & percentages)
-    agg["CPU_ms"] = agg["CPU_us"] / 1000.0
-    agg["CUDA_ms"] = agg["CUDA_us"] / 1000.0
+#     # Derived metrics (ms & percentages)
+#     agg["CPU_ms"] = agg["CPU_us"] / 1000.0
+#     agg["CUDA_ms"] = agg["CUDA_us"] / 1000.0
 
-    total_cuda_ms = agg["CUDA_ms"].sum()
-    if total_cuda_ms <= 0:
-        # Avoid division by zero
-        total_cuda_ms = 1e-9
+#     total_cuda_ms = agg["CUDA_ms"].sum()
+#     if total_cuda_ms <= 0:
+#         # Avoid division by zero
+#         total_cuda_ms = 1e-9
 
-    agg["CUDA_%"] = 100.0 * agg["CUDA_ms"] / total_cuda_ms
+#     agg["CUDA_%"] = 100.0 * agg["CUDA_ms"] / total_cuda_ms
 
-    # Rank by CUDA time and keep Top-K
-    top = (
-        agg.sort_values("CUDA_ms", ascending=False)
-           .head(max(1, int(top_k)))
-           .copy()
-    )
+#     # Rank by CUDA time and keep Top-K
+#     top = (
+#         agg.sort_values("CUDA_ms", ascending=False)
+#            .head(max(1, int(top_k)))
+#            .copy()
+#     )
 
-    # Nice labels
-    top["Label"] = top["Name"]
+#     # Nice labels
+#     top["Label"] = top["Name"]
 
-    # Build figure
-    title = f"Top {len(top)} Ops by CUDA Time (total={total_cuda_ms:.1f} ms)"
-    height = 50 * len(top) + 220  # scale height with K (roomy)
-    fig = px.bar(
-        top.sort_values("CUDA_ms", ascending=True),
-        x="CUDA_ms",
-        y="Label",
-        orientation="h",
-        text=top["CUDA_%"].map(lambda x: f"{x:.1f}%"),
-        hover_data={
-            "CUDA_ms": ":.3f",
-            "CPU_ms": ":.3f",
-            "CUDA_%": ":.2f",
-            "Calls": True,
-            "Self CPU Mem (KB)": True,
-            "Self CUDA Mem (KB)": True,
-            "Input shapes": True,
-            "Label": False,
-        },
-        title=title,
-        labels={
-            "CUDA_ms": "CUDA time total (ms)",
-            "Label": "Op name",
-            "CPU_ms": "CPU time total (ms)",
-            "CUDA_%": "Share of total CUDA time",
-        },
-    )
+#     # Build figure
+#     title = f"Top {len(top)} Ops by CUDA Time (total={total_cuda_ms:.1f} ms)"
+#     height = 50 * len(top) + 220  # scale height with K (roomy)
+#     fig = px.bar(
+#         top.sort_values("CUDA_ms", ascending=True),
+#         x="CUDA_ms",
+#         y="Label",
+#         orientation="h",
+#         text=top["CUDA_%"].map(lambda x: f"{x:.1f}%"),
+#         hover_data={
+#             "CUDA_ms": ":.3f",
+#             "CPU_ms": ":.3f",
+#             "CUDA_%": ":.2f",
+#             "Calls": True,
+#             "Self CPU Mem (KB)": True,
+#             "Self CUDA Mem (KB)": True,
+#             "Input shapes": True,
+#             "Label": False,
+#         },
+#         title=title,
+#         labels={
+#             "CUDA_ms": "CUDA time total (ms)",
+#             "Label": "Op name",
+#             "CPU_ms": "CPU time total (ms)",
+#             "CUDA_%": "Share of total CUDA time",
+#         },
+#     )
 
-    # Layout tweaks for long labels
-    fig.update_layout(
-        height=height,
-        margin=dict(l=380, r=80, t=80, b=60),  # big left margin for long op names
-        xaxis=dict(title="CUDA time total (ms)"),
-        yaxis=dict(automargin=True),
-        uniformtext_minsize=10,
-        font=dict(size=12),
-    )
-    fig.update_traces(textposition="outside", cliponaxis=False)
+#     # Layout tweaks for long labels
+#     fig.update_layout(
+#         height=height,
+#         margin=dict(l=380, r=80, t=80, b=60),  # big left margin for long op names
+#         xaxis=dict(title="CUDA time total (ms)"),
+#         yaxis=dict(automargin=True),
+#         uniformtext_minsize=10,
+#         font=dict(size=12),
+#     )
+#     fig.update_traces(textposition="outside", cliponaxis=False)
 
-    # Save interactive HTML
-    fig.write_html(html_path, include_plotlyjs="cdn", full_html=True)
+#     # Save interactive HTML
+#     fig.write_html(html_path, include_plotlyjs="cdn", full_html=True)
 
-    # Try to save PNG (requires kaleido)
-    try:
-        fig.write_image(png_path, scale=2)  # needs `pip install -U kaleido`
-    except Exception as e:
-        print(f"[build_profiler_plots] PNG export skipped (install 'kaleido' to enable). Reason: {e}")
+#     # Try to save PNG (requires kaleido)
+#     try:
+#         fig.write_image(png_path, scale=2)  # needs `pip install -U kaleido`
+#     except Exception as e:
+#         print(f"[build_profiler_plots] PNG export skipped (install 'kaleido' to enable). Reason: {e}")
 
-    print(f"[build_profiler_plots] Wrote HTML to: {html_path}")
-    if os.path.exists(png_path):
-        print(f"[build_profiler_plots] Wrote PNG  to: {png_path}")
+#     print(f"[build_profiler_plots] Wrote HTML to: {html_path}")
+#     if os.path.exists(png_path):
+#         print(f"[build_profiler_plots] Wrote PNG  to: {png_path}")
 
-    return top
+#     return top
 
 
 @torch.no_grad()
@@ -266,10 +266,10 @@ def Pi3_profile_svdllm_low_resource(
         # attention
         if hasattr(blk, "attn"):
             attn = blk.attn
-            if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
-                targets[f"decoder.{i}.attn.qkv"] = attn.qkv
-            if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
-                targets[f"decoder.{i}.attn.proj"] = attn.proj
+            # if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
+            #     targets[f"decoder.{i}.attn.qkv"] = attn.qkv
+            # if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
+            #     targets[f"decoder.{i}.attn.proj"] = attn.proj
         # mlp (ffn)
         if hasattr(blk, "mlp"):
             mlp = blk.mlp
@@ -389,10 +389,10 @@ def Pi3_whitening(model: Pi3, profiling_mat: Dict[str, torch.Tensor], ratio: flo
         # attention
         if hasattr(blk, "attn"):
             attn = blk.attn
-            if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
-                layers[f"decoder.{i}.attn.qkv"] = attn.qkv
-            if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
-                layers[f"decoder.{i}.attn.proj"] = attn.proj
+            # if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
+            #     layers[f"decoder.{i}.attn.qkv"] = attn.qkv
+            # if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
+            #     layers[f"decoder.{i}.attn.proj"] = attn.proj
         # mlp (ffn)
         if hasattr(blk, "mlp"):
             mlp = blk.mlp
@@ -405,7 +405,6 @@ def Pi3_whitening(model: Pi3, profiling_mat: Dict[str, torch.Tensor], ratio: flo
     # Caches for per-block replacements
     svd_attn_cache: Dict[int, SVD_Pi3Attention] = {}
     svd_mlp_cache: Dict[int, SVD_Pi3MLP] = {}
-    PCA_fallback_count = 0
     
     def ensure_svd_attn(block_idx: int, orig_attn) -> SVD_Pi3Attention:
         if block_idx in svd_attn_cache:
@@ -733,7 +732,7 @@ def main():
         accelerator = Accelerator()
         state_dict = accelerator.get_state_dict(model)
         from safetensors.torch import save_file
-        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}.safetensors"
+        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}_fc_only.safetensors"
         save_file(state_dict, out_path)
     
     elif args.step >= 4:
