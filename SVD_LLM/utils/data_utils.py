@@ -14,10 +14,10 @@ parent_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(current_path)
 IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
 
-#RGB_MODALITIES = ["albedo", "camdata_left", "clean", "final", "depth_viz", "flow_viz"]
+RGB_MODALITIES = ["albedo", "camdata_left", "clean", "final", "depth_viz", "flow_viz"]
 #RGB_MODALITIES = ["clean", "final"]
 #RGB_MODALITIES = ["final"]
-RGB_MODALITIES = ["albedo", "camdata_left", "clean", "depth", "depth_viz", "final", "flow", "flow_viz", "invalid", "occlusions"]
+#RGB_MODALITIES = ["albedo", "camdata_left", "clean", "depth", "depth_viz", "final", "flow", "flow_viz", "invalid", "occlusions"]
 
 
 def collect_sintel_frames(root: str, split: str, folder: str) -> List[str]:

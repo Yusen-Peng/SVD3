@@ -532,7 +532,7 @@ def main():
         accelerator = Accelerator()
         state_dict = accelerator.get_state_dict(model)
         from safetensors.torch import save_file
-        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}_ALL_IN.safetensors"
+        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}_debug.safetensors"
         save_file(state_dict, out_path)
     
     elif args.step >= 4:

@@ -18,8 +18,8 @@ pi3:
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/LoRA/Pi3_lora_U_0.8.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8_FINAL_CLEAN.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8_FINAL.safetensors
-  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8_ALL_IN.safetensors
-
+  #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8_ALL_IN.safetensors
+  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.8_debug.safetensors
 
 eval_datasets:
   - sintel
