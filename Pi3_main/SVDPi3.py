@@ -592,8 +592,191 @@ def Pi3_whitening(model: Pi3, profiling_mat: Dict[str, torch.Tensor], ratio: flo
     print(f"✅ Pi3 whitening + SVD low-rank replacement complete for {len(layers)} Linear layers.")
 
 
+@torch.no_grad()
+def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
+    """
+    Baseline: directly apply SVD to each target Linear weight W (no whitening).
+    Replaces attention.qkv / attention.proj / mlp.fc1 / mlp.fc2 with low-rank
+    factorizations using the same SVD_Pi3Attention/SVD_Pi3MLP shells you already use.
+    """
+    model.eval()
+    dev = torch.device(device) if device is not None else next(model.parameters()).device
+
+    # ---------- collect targets ----------
+    layers = OrderedDict()
+    for i, blk in enumerate(model.decoder):
+        # attention
+        if hasattr(blk, "attn"):
+            attn = blk.attn
+            if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
+                layers[f"decoder.{i}.attn.qkv"] = attn.qkv
+            if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
+                layers[f"decoder.{i}.attn.proj"] = attn.proj
+        # mlp
+        if hasattr(blk, "mlp"):
+            mlp = blk.mlp
+            if hasattr(mlp, "fc1") and isinstance(mlp.fc1, nn.Linear):
+                layers[f"decoder.{i}.mlp.fc1"] = mlp.fc1
+            if hasattr(mlp, "fc2") and isinstance(mlp.fc2, nn.Linear):
+                layers[f"decoder.{i}.mlp.fc2"] = mlp.fc2
+
+    print(f"Start plain SVD (no whitening) for {len(layers)} Linear targets...")
+
+    # ---------- caches (same idea as your whitening func) ----------
+    svd_attn_cache: Dict[int, SVD_Pi3Attention] = {}
+    svd_mlp_cache: Dict[int, SVD_Pi3MLP] = {}
+
+    def ensure_svd_attn(block_idx: int, orig_attn) -> SVD_Pi3Attention:
+        if block_idx in svd_attn_cache:
+            return svd_attn_cache[block_idx]
+        D = orig_attn.qkv.in_features
+        H = getattr(orig_attn, "num_heads", 16)
+        r_qkv = max(1, D // 4)  # temp; actual r is set by actual factors below
+        r_out = max(1, D // 4)
+        attn_drop = getattr(orig_attn, "attn_drop", 0.0)
+        proj_drop = getattr(orig_attn, "proj_drop", 0.0)
+        rope = getattr(orig_attn, "rope", None)
+        svd_attn = SVD_Pi3Attention(
+            embed_dim=D, num_heads=H,
+            r_qkv=r_qkv, r_out=r_out,
+            attn_drop_rate=attn_drop, proj_drop_rate=proj_drop,
+            use_bias_qkv=(orig_attn.qkv.bias is not None),
+            use_bias_out=(orig_attn.proj.bias is not None),
+            rope=rope
+        )
+        model.decoder[block_idx].attn = svd_attn
+        svd_attn_cache[block_idx] = svd_attn
+        return svd_attn
+
+    def ensure_svd_mlp(block_idx: int, orig_mlp) -> SVD_Pi3MLP:
+        if block_idx in svd_mlp_cache:
+            return svd_mlp_cache[block_idx]
+        D = orig_mlp.fc1.in_features
+        I = orig_mlp.fc1.out_features
+        r1 = max(1, (I + D) // 8)  # temp; actual r set by factors below
+        r2 = max(1, (I + D) // 8)
+        act_name = "gelu"
+        if hasattr(orig_mlp, "act") and isinstance(orig_mlp.act, nn.Module):
+            act_name = orig_mlp.act.__class__.__name__.lower()
+        drop = getattr(orig_mlp, "drop", 0.0)
+        svd_mlp = SVD_Pi3MLP(
+            embed_dim=D, intermediate_dim=I,
+            r_fc1=r1, r_fc2=r2,
+            activation=act_name, drop_rate=drop,
+            use_bias_fc1=(orig_mlp.fc1.bias is not None),
+            use_bias_fc2=(orig_mlp.fc2.bias is not None),
+        )
+        model.decoder[block_idx].mlp = svd_mlp
+        svd_mlp_cache[block_idx] = svd_mlp
+        return svd_mlp
+
+    # ---------- utils ----------
+    def trunc_rank(m: int, n: int, r: float) -> int:
+        # same heuristic as your whitening version
+        rr = int((m * n * r) / (m + n))
+        return max(1, min(rr, min(m, n)))
+
+    def sanitize(t: torch.Tensor, replace: float = 0.0) -> torch.Tensor:
+        t = t.clone()
+        mask = ~torch.isfinite(t)
+        if mask.any():
+            t[mask] = replace
+        return t
+
+    def safe_svd(M: torch.Tensor):
+        try:
+            return torch.linalg.svd(M, full_matrices=False)
+        except Exception:
+            pass
+        try:
+            return torch.linalg.svd(M.to(torch.float64), full_matrices=False)
+        except Exception:
+            pass
+        try:
+            U, S, VT = torch.linalg.svd(M.detach().cpu().to(torch.float64), full_matrices=False)
+            return U.to(M.device, dtype=M.dtype), S.to(M.device, dtype=M.dtype), VT.to(M.device, dtype=M.dtype)
+        except Exception:
+            raise RuntimeError("SVD failed on device and CPU in both float32 and float64.")
+
+    # ---------- factorization loop ----------
+    for key, linear in tqdm(layers.items()):
+        parts = key.split(".")
+        i = int(parts[1])
+        sub = parts[2]
+        leaf = parts[3]
+
+        # W only (no whitening)
+        W = linear.weight.data.to(dev).float()
+        W = sanitize(W)
+
+        out_dim, in_dim = W.shape
+        U, Svals, VT = safe_svd(W)
+
+        r = trunc_rank(out_dim, in_dim, ratio)
+        r = min(r, U.shape[1], VT.shape[0], Svals.shape[0])
+
+        U_r, S_r, VT_r = U[:, :r], Svals[:r], VT[:r, :]  # (out,r), (r,), (r,in)
+
+        # balanced split
+        S_r = sanitize(S_r)
+        sqrtS = torch.sqrt(torch.clamp(S_r, min=0.0) + 1e-12)
+        svd_u = (U_r * sqrtS.unsqueeze(0)).detach().cpu().to(linear.weight.dtype)  # (out,r)
+        svd_v = (sqrtS.unsqueeze(1) * VT_r).detach().cpu().to(linear.weight.dtype) # (r,in)
+        bias = linear.bias.detach().cpu().to(linear.weight.dtype) if linear.bias is not None else None
+
+        # ----- install into shells -----
+        if sub == "attn":
+            orig_attn = getattr(model.decoder[i], "attn")
+            svd_attn = ensure_svd_attn(i, orig_attn)
+
+            if leaf == "qkv":
+                # qkv: out = 3*D, in = D
+                svd_attn.qkv_u = nn.Linear(svd_v.shape[0], 3 * svd_attn.embed_dim, bias=(svd_attn.qkv_u.bias is not None))
+                svd_attn.qkv_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
+                svd_attn.qkv_u.weight.data.copy_(svd_u)  # (3D, r)
+                svd_attn.qkv_v.weight.data.copy_(svd_v)  # (r, D)
+                if svd_attn.qkv_u.bias is not None and bias is not None:
+                    svd_attn.qkv_u.bias.data.copy_(bias)
+
+            elif leaf == "proj":
+                svd_attn.o_u = nn.Linear(svd_v.shape[0], svd_attn.embed_dim, bias=(svd_attn.o_u.bias is not None))
+                svd_attn.o_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
+                svd_attn.o_u.weight.data.copy_(svd_u)  # (D, r)
+                svd_attn.o_v.weight.data.copy_(svd_v)  # (r, D)
+                if svd_attn.o_u.bias is not None and bias is not None:
+                    svd_attn.o_u.bias.data.copy_(bias)
+
+        elif sub == "mlp":
+            svd_mlp = ensure_svd_mlp(i, getattr(model.decoder[i], "mlp"))
+
+            in_f  = linear.in_features
+            out_f = linear.out_features
+            has_bias = (linear.bias is not None)
+
+            if leaf == "fc1":
+                svd_mlp.fc1_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
+                svd_mlp.fc1_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
+                svd_mlp.fc1_u.weight.data.copy_(svd_u)  # (out_f, r)
+                svd_mlp.fc1_v.weight.data.copy_(svd_v)  # (r, in_f)
+                if has_bias and bias is not None:
+                    svd_mlp.fc1_u.bias.data.copy_(bias)
+
+            elif leaf == "fc2":
+                svd_mlp.fc2_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
+                svd_mlp.fc2_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
+                svd_mlp.fc2_u.weight.data.copy_(svd_u)
+                svd_mlp.fc2_v.weight.data.copy_(svd_v)
+                if has_bias and bias is not None:
+                    svd_mlp.fc2_u.bias.data.copy_(bias)
+
+                del svd_u, svd_v, bias
+                torch.cuda.empty_cache()
+
+    print(f"✅ Plain SVD (no whitening) low-rank replacement complete for {len(layers)} Linear layers.")
 
 def main():
+    # NOTE: whether to run the baseline SVD (no whitening) mode
+    BASELINE = False
 
     parser = argparse.ArgumentParser()
 
@@ -642,26 +825,36 @@ def main():
         model = model.eval()
         print("✅ model loaded.")
 
-        # collect calibration data
-        print("Start collecting calibration data...")
-        cali_white_data = Pi3_get_calib_train_data(
-            root=args.calibration_dataset_path,
-            nsamples=args.whitening_nsamples
-        )
-        print(f"✅ collected {len(cali_white_data)} calibration batches (~{sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
 
-        # derive the whitening matrix via profiling
-        profiling_mat = Pi3_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
+        if not BASELINE:
+            # collect calibration data
+            print("Start collecting calibration data...")
+            cali_white_data = Pi3_get_calib_train_data(
+                root=args.calibration_dataset_path,
+                nsamples=args.whitening_nsamples
+            )
+            print(f"✅ collected {len(cali_white_data)} calibration batches (~{sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
 
-        # apply whitening
-        Pi3_whitening(model, profiling_mat, args.ratio, args.DEV)
+            # derive the whitening matrix via profiling
+            profiling_mat = Pi3_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
 
-        # save the model using accelerate
-        accelerator = Accelerator()
-        state_dict = accelerator.get_state_dict(model)
-        from safetensors.torch import save_file
-        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}_512.safetensors"
-        save_file(state_dict, out_path)
+            # apply whitening
+            Pi3_whitening(model, profiling_mat, args.ratio, args.DEV)
+
+            # save the model using accelerate
+            accelerator = Accelerator()
+            state_dict = accelerator.get_state_dict(model)
+            from safetensors.torch import save_file
+            out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}.safetensors"
+            save_file(state_dict, out_path)
+        else:
+            Pi3_svd_baseline(model, args.ratio, args.DEV)
+            # save the model using accelerate
+            accelerator = Accelerator()
+            state_dict = accelerator.get_state_dict(model)
+            from safetensors.torch import save_file
+            out_path = f"{args.save_path}/Pi3_svd_baseline_{str(args.ratio)}.safetensors"
+            save_file(state_dict, out_path)
     
     elif args.step >= 4:
         """
