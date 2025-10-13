@@ -77,7 +77,7 @@ def Pi3_get_calib_train_data(
     nsamples: int = 256,
     batch_size: int = 8,
     image_size: int = 224,
-    sampling_stride: int = 10,
+    sampling_stride: int = 1,
     split: str = "training",
     seed: int = 3,
     cache_dir: str = "/data/wanghaoxuan/SVD_Pi3_cache",
@@ -88,7 +88,10 @@ def Pi3_get_calib_train_data(
         f"sintel_{split}_ALLMODS_{nsamples}_{image_size}_{batch_size}_{sampling_stride}_{seed}.pt"
     )
     if os.path.exists(cache_file):
+        print(f"[💥WARNING💥] Loading cached calibration data from {cache_file}...")
         return torch.load(cache_file)
+    else:
+        print(f"[NOTE] Building new calibration data and caching to {cache_file}...")
 
     random.seed(seed)
     torch.manual_seed(seed)
@@ -140,7 +143,6 @@ def Pi3_get_calib_train_data(
     if len(chosen) > nsamples:
         chosen = random.sample(chosen, nsamples)
 
-    # NOTE: avoid modality clumping in batches
     random.shuffle(chosen)
 
     # image preprocessing + batching
@@ -602,7 +604,6 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
     model.eval()
     dev = torch.device(device) if device is not None else next(model.parameters()).device
 
-    # ---------- collect targets ----------
     layers = OrderedDict()
     for i, blk in enumerate(model.decoder):
         # attention
@@ -622,7 +623,6 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
 
     print(f"Start plain SVD (no whitening) for {len(layers)} Linear targets...")
 
-    # ---------- caches (same idea as your whitening func) ----------
     svd_attn_cache: Dict[int, SVD_Pi3Attention] = {}
     svd_mlp_cache: Dict[int, SVD_Pi3MLP] = {}
 
@@ -631,7 +631,7 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
             return svd_attn_cache[block_idx]
         D = orig_attn.qkv.in_features
         H = getattr(orig_attn, "num_heads", 16)
-        r_qkv = max(1, D // 4)  # temp; actual r is set by actual factors below
+        r_qkv = max(1, D // 4)  
         r_out = max(1, D // 4)
         attn_drop = getattr(orig_attn, "attn_drop", 0.0)
         proj_drop = getattr(orig_attn, "proj_drop", 0.0)
@@ -670,7 +670,6 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
         svd_mlp_cache[block_idx] = svd_mlp
         return svd_mlp
 
-    # ---------- utils ----------
     def trunc_rank(m: int, n: int, r: float) -> int:
         # same heuristic as your whitening version
         rr = int((m * n * r) / (m + n))
@@ -698,7 +697,6 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
         except Exception:
             raise RuntimeError("SVD failed on device and CPU in both float32 and float64.")
 
-    # ---------- factorization loop ----------
     for key, linear in tqdm(layers.items()):
         parts = key.split(".")
         i = int(parts[1])
@@ -803,111 +801,52 @@ def main():
     args = parser.parse_args()
     args.ratio = 1- args.ratio
 
-
-    if args.step == 1:
-        """
-            Whitening only (no updates)
-        """
-
-        print(f'Whitening only (no updates) with sampling interval: {args.interval}')
-        device = torch.device(args.device)
-        if args.ckpt is not None:
-            model = Pi3().to(device).eval()
-            if args.ckpt.endswith('.safetensors'): 
-                weight = load_file(args.ckpt)
-            else:
-                weight = torch.load(args.ckpt, map_location=device, weights_only=False)
-            
-            model.load_state_dict(weight)
+    device = torch.device(args.device)
+    if args.ckpt is not None:
+        model = Pi3().to(device).eval()
+        if args.ckpt.endswith('.safetensors'): 
+            weight = load_file(args.ckpt)
         else:
-            model = Pi3.from_pretrained("yyfz233/Pi3").to(device).eval()
-
-        model = model.eval()
-        print("✅ model loaded.")
-
-
-        if not BASELINE:
-            # collect calibration data
-            print("Start collecting calibration data...")
-            cali_white_data = Pi3_get_calib_train_data(
-                root=args.calibration_dataset_path,
-                nsamples=args.whitening_nsamples
-            )
-            print(f"✅ collected {len(cali_white_data)} calibration batches (~{sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
-
-            # derive the whitening matrix via profiling
-            profiling_mat = Pi3_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
-
-            # apply whitening
-            Pi3_whitening(model, profiling_mat, args.ratio, args.DEV)
-
-            # save the model using accelerate
-            accelerator = Accelerator()
-            state_dict = accelerator.get_state_dict(model)
-            from safetensors.torch import save_file
-            out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}.safetensors"
-            save_file(state_dict, out_path)
-        else:
-            Pi3_svd_baseline(model, args.ratio, args.DEV)
-            # save the model using accelerate
-            accelerator = Accelerator()
-            state_dict = accelerator.get_state_dict(model)
-            from safetensors.torch import save_file
-            out_path = f"{args.save_path}/Pi3_svd_baseline_{str(args.ratio)}.safetensors"
-            save_file(state_dict, out_path)
-    
-    elif args.step >= 4:
-        """
-            Evaluation modes.
-        """
-
-        if args.model_path == "original":
-            # evaluating the original Pi3 model
-            print("evaluating the original Pi3 model...")
-            device = torch.device(args.device)
-            if args.ckpt is not None:
-                # typically load a local version of Pi3 checkpoint
-                model = Pi3().to(device).eval()
-                if args.ckpt.endswith('.safetensors'): 
-                    weight = load_file(args.ckpt)
-                else:
-                    weight = torch.load(args.ckpt, map_location=device, weights_only=False)
-                
-                model.load_state_dict(weight)
-            else:
-                # last resort: download from huggingface
-                model = Pi3.from_pretrained("yyfz233/Pi3").to(device).eval()
-        else:
-            print(f'evaluating the compressed Pi3 model...')
-            pass
-            
-        model.eval()
-        model = model.float()
-        model = model.to(args.DEV)
-        print("✅ model loaded.")
-
-
-
-
-        if args.step == 4:
-            """
-                Accuracy evaluation
-            """
-
-            pass
-            #ppl_eval(model, tokenizer, datasets=['wikitext2'], model_seq_len=args.model_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
+            weight = torch.load(args.ckpt, map_location=device, weights_only=False)
         
-        
-        elif args.step == 5:
-            """
-                Efficiency evaluation
-            """
-            pass
-            #eff_eval(model, tokenizer, generated_len=args.gen_seq_len, batch_size=args.eval_batch_size, device=args.DEV)
-    
+        model.load_state_dict(weight)
+    else:
+        model = Pi3.from_pretrained("yyfz233/Pi3").to(device).eval()
+
+    model = model.eval()
+    print("✅ model loaded.")
+
+
+    if not BASELINE:
+        # collect calibration data
+        print("Start collecting calibration data...")
+        cali_white_data = Pi3_get_calib_train_data(
+            root=args.calibration_dataset_path,
+            nsamples=args.whitening_nsamples
+        )
+        print(f"✅ collected {len(cali_white_data)} calibration batches (~{sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
+
+        # derive the whitening matrix via profiling
+        profiling_mat = Pi3_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
+
+        # apply whitening
+        Pi3_whitening(model, profiling_mat, args.ratio, args.DEV)
+
+        # save the model using accelerate
+        accelerator = Accelerator()
+        state_dict = accelerator.get_state_dict(model)
+        from safetensors.torch import save_file
+        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}.safetensors"
+        save_file(state_dict, out_path)
+    else:
+        Pi3_svd_baseline(model, args.ratio, args.DEV)
+        # save the model using accelerate
+        accelerator = Accelerator()
+        state_dict = accelerator.get_state_dict(model)
+        from safetensors.torch import save_file
+        out_path = f"{args.save_path}/Pi3_svd_baseline_{str(args.ratio)}.safetensors"
+        save_file(state_dict, out_path)    
     print("✅✅✅ALL DONE!✅✅✅")
 
 if __name__ == "__main__":
-
-    print("✅Hello world")
     main()
