@@ -594,16 +594,50 @@ def Pi3_whitening(model: Pi3, profiling_mat: Dict[str, torch.Tensor], ratio: flo
     print(f"✅ Pi3 whitening + SVD low-rank replacement complete for {len(layers)} Linear layers.")
 
 
+class TwoFactorLinear(nn.Module):
+    def __init__(self, in_features: int, out_features: int,
+                 W_u: torch.Tensor, W_v: torch.Tensor, bias: Optional[torch.Tensor]):
+        super().__init__()
+        r = W_v.shape[0]
+        assert W_v.shape == (r, in_features)
+        assert W_u.shape == (out_features, r)
+        self.v = nn.Linear(in_features, r, bias=False)
+        self.u = nn.Linear(r, out_features, bias=(bias is not None))
+        with torch.no_grad():
+            self.v.weight.copy_(W_v)
+            self.u.weight.copy_(W_u)
+            if bias is not None:
+                self.u.bias.copy_(bias)
+
+    def forward(self, x):
+        return self.u(self.v(x))
+
+
+def safe_svd(M: torch.Tensor):
+    """
+        Apply SVD on M with fallbacks.
+    """
+    try:
+        U, S, VT = torch.linalg.svd(M.detach(), full_matrices=False)
+        return U.to(M.device, dtype=M.dtype), S.to(M.device, dtype=M.dtype), VT.to(M.device, dtype=M.dtype)
+    except Exception:
+        raise RuntimeError("SVD failed. Bad times!")
+
+def sanitize(t: torch.Tensor, replace: float = 0.0) -> torch.Tensor:
+    t = t.clone()
+    mask = ~torch.isfinite(t)
+    if mask.any():
+        t[mask] = replace
+    return t
+
+def trunc_rank(m: int, n: int, r: float) -> int:
+    rr = int((m * n * r) / (m + n))
+    return max(1, min(rr, min(m, n)))
+
 @torch.no_grad()
 def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
-    """
-    Baseline: directly apply SVD to each target Linear weight W (no whitening).
-    Replaces attention.qkv / attention.proj / mlp.fc1 / mlp.fc2 with low-rank
-    factorizations using the same SVD_Pi3Attention/SVD_Pi3MLP shells you already use.
-    """
     model.eval()
     dev = torch.device(device) if device is not None else next(model.parameters()).device
-
     layers = OrderedDict()
     for i, blk in enumerate(model.decoder):
         # attention
@@ -623,158 +657,38 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
 
     print(f"Start plain SVD (no whitening) for {len(layers)} Linear targets...")
 
-    svd_attn_cache: Dict[int, SVD_Pi3Attention] = {}
-    svd_mlp_cache: Dict[int, SVD_Pi3MLP] = {}
-
-    def ensure_svd_attn(block_idx: int, orig_attn) -> SVD_Pi3Attention:
-        if block_idx in svd_attn_cache:
-            return svd_attn_cache[block_idx]
-        D = orig_attn.qkv.in_features
-        H = getattr(orig_attn, "num_heads", 16)
-        r_qkv = max(1, D // 4)  
-        r_out = max(1, D // 4)
-        attn_drop = getattr(orig_attn, "attn_drop", 0.0)
-        proj_drop = getattr(orig_attn, "proj_drop", 0.0)
-        rope = getattr(orig_attn, "rope", None)
-        svd_attn = SVD_Pi3Attention(
-            embed_dim=D, num_heads=H,
-            r_qkv=r_qkv, r_out=r_out,
-            attn_drop_rate=attn_drop, proj_drop_rate=proj_drop,
-            use_bias_qkv=(orig_attn.qkv.bias is not None),
-            use_bias_out=(orig_attn.proj.bias is not None),
-            rope=rope
-        )
-        model.decoder[block_idx].attn = svd_attn
-        svd_attn_cache[block_idx] = svd_attn
-        return svd_attn
-
-    def ensure_svd_mlp(block_idx: int, orig_mlp) -> SVD_Pi3MLP:
-        if block_idx in svd_mlp_cache:
-            return svd_mlp_cache[block_idx]
-        D = orig_mlp.fc1.in_features
-        I = orig_mlp.fc1.out_features
-        r1 = max(1, (I + D) // 8)  # temp; actual r set by factors below
-        r2 = max(1, (I + D) // 8)
-        act_name = "gelu"
-        if hasattr(orig_mlp, "act") and isinstance(orig_mlp.act, nn.Module):
-            act_name = orig_mlp.act.__class__.__name__.lower()
-        drop = getattr(orig_mlp, "drop", 0.0)
-        svd_mlp = SVD_Pi3MLP(
-            embed_dim=D, intermediate_dim=I,
-            r_fc1=r1, r_fc2=r2,
-            activation=act_name, drop_rate=drop,
-            use_bias_fc1=(orig_mlp.fc1.bias is not None),
-            use_bias_fc2=(orig_mlp.fc2.bias is not None),
-        )
-        model.decoder[block_idx].mlp = svd_mlp
-        svd_mlp_cache[block_idx] = svd_mlp
-        return svd_mlp
-
-    def trunc_rank(m: int, n: int, r: float) -> int:
-        # same heuristic as your whitening version
-        rr = int((m * n * r) / (m + n))
-        return max(1, min(rr, min(m, n)))
-
-    def sanitize(t: torch.Tensor, replace: float = 0.0) -> torch.Tensor:
-        t = t.clone()
-        mask = ~torch.isfinite(t)
-        if mask.any():
-            t[mask] = replace
-        return t
-
-    def safe_svd(M: torch.Tensor):
-        try:
-            return torch.linalg.svd(M, full_matrices=False)
-        except Exception:
-            pass
-        try:
-            return torch.linalg.svd(M.to(torch.float64), full_matrices=False)
-        except Exception:
-            pass
-        try:
-            U, S, VT = torch.linalg.svd(M.detach().cpu().to(torch.float64), full_matrices=False)
-            return U.to(M.device, dtype=M.dtype), S.to(M.device, dtype=M.dtype), VT.to(M.device, dtype=M.dtype)
-        except Exception:
-            raise RuntimeError("SVD failed on device and CPU in both float32 and float64.")
-
     for key, linear in tqdm(layers.items()):
-        parts = key.split(".")
+        parts = key.split(".") # ["decoder", "{i}", "attn"/"mlp", leaf]
         i = int(parts[1])
-        sub = parts[2]
         leaf = parts[3]
 
         # W only (no whitening)
         W = linear.weight.data.to(dev).float()
         W = sanitize(W)
-
-        out_dim, in_dim = W.shape
         U, Svals, VT = safe_svd(W)
+        num_s_after_trunc = int(W.shape[0] * W.shape[1] * ratio / (W.shape[0] + W.shape[1]))
+        print(f"Layer {key}: truncate rank from {Svals.shape[0]} to {num_s_after_trunc}", flush=True)
+        U_r, S_r, VT_r = U[:, :num_s_after_trunc], Svals[:num_s_after_trunc], VT[:num_s_after_trunc, :]
 
-        r = trunc_rank(out_dim, in_dim, ratio)
-        r = min(r, U.shape[1], VT.shape[0], Svals.shape[0])
-
-        U_r, S_r, VT_r = U[:, :r], Svals[:r], VT[:r, :]  # (out,r), (r,), (r,in)
-
-        # balanced split
         S_r = sanitize(S_r)
-        sqrtS = torch.sqrt(torch.clamp(S_r, min=0.0) + 1e-12)
-        svd_u = (U_r * sqrtS.unsqueeze(0)).detach().cpu().to(linear.weight.dtype)  # (out,r)
-        svd_v = (sqrtS.unsqueeze(1) * VT_r).detach().cpu().to(linear.weight.dtype) # (r,in)
-        bias = linear.bias.detach().cpu().to(linear.weight.dtype) if linear.bias is not None else None
+        W_v = VT_r.detach().to(linear.weight.device, dtype=linear.weight.dtype)          # (r, in)
+        W_u = (U_r * S_r.unsqueeze(0)).detach().to(linear.weight.device, dtype=linear.weight.dtype)  # (out, r)
+        b   = linear.bias.detach().to(linear.weight.device, dtype=linear.weight.dtype) if linear.bias is not None else None
 
-        # ----- install into shells -----
-        if sub == "attn":
-            orig_attn = getattr(model.decoder[i], "attn")
-            svd_attn = ensure_svd_attn(i, orig_attn)
-
-            if leaf == "qkv":
-                # qkv: out = 3*D, in = D
-                svd_attn.qkv_u = nn.Linear(svd_v.shape[0], 3 * svd_attn.embed_dim, bias=(svd_attn.qkv_u.bias is not None))
-                svd_attn.qkv_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
-                svd_attn.qkv_u.weight.data.copy_(svd_u)  # (3D, r)
-                svd_attn.qkv_v.weight.data.copy_(svd_v)  # (r, D)
-                if svd_attn.qkv_u.bias is not None and bias is not None:
-                    svd_attn.qkv_u.bias.data.copy_(bias)
-
-            elif leaf == "proj":
-                svd_attn.o_u = nn.Linear(svd_v.shape[0], svd_attn.embed_dim, bias=(svd_attn.o_u.bias is not None))
-                svd_attn.o_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
-                svd_attn.o_u.weight.data.copy_(svd_u)  # (D, r)
-                svd_attn.o_v.weight.data.copy_(svd_v)  # (r, D)
-                if svd_attn.o_u.bias is not None and bias is not None:
-                    svd_attn.o_u.bias.data.copy_(bias)
-
-        elif sub == "mlp":
-            svd_mlp = ensure_svd_mlp(i, getattr(model.decoder[i], "mlp"))
-
-            in_f  = linear.in_features
-            out_f = linear.out_features
-            has_bias = (linear.bias is not None)
-
-            if leaf == "fc1":
-                svd_mlp.fc1_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
-                svd_mlp.fc1_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
-                svd_mlp.fc1_u.weight.data.copy_(svd_u)  # (out_f, r)
-                svd_mlp.fc1_v.weight.data.copy_(svd_v)  # (r, in_f)
-                if has_bias and bias is not None:
-                    svd_mlp.fc1_u.bias.data.copy_(bias)
-
-            elif leaf == "fc2":
-                svd_mlp.fc2_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
-                svd_mlp.fc2_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
-                svd_mlp.fc2_u.weight.data.copy_(svd_u)
-                svd_mlp.fc2_v.weight.data.copy_(svd_v)
-                if has_bias and bias is not None:
-                    svd_mlp.fc2_u.bias.data.copy_(bias)
-
-                del svd_u, svd_v, bias
-                torch.cuda.empty_cache()
-
+        # install into shells
+        parent = model
+        for p in parts[:-1]:  # walk to the parent module of 'leaf'
+            parent = getattr(parent, p)
+        setattr(parent, leaf, TwoFactorLinear(
+            in_features=linear.in_features,
+            out_features=linear.out_features,
+            W_u=W_u, W_v=W_v, bias=b
+        ))
     print(f"✅ Plain SVD (no whitening) low-rank replacement complete for {len(layers)} Linear layers.")
 
 def main():
     # NOTE: whether to run the baseline SVD (no whitening) mode
-    BASELINE = False
+    BASELINE = True
 
     parser = argparse.ArgumentParser()
 
@@ -784,22 +698,20 @@ def main():
     parser.add_argument('--dataset', type=str, default='wikitext2',help='Where to extract calibration data from [wikitext2, ptb, c4]')
     parser.add_argument('--whitening_nsamples', type=int, default=256, help='Number of calibration data samples for whitening.')
     parser.add_argument('--updating_nsamples', type=int, default=16, help='Number of calibration data samples for udpating.')
-    parser.add_argument('--save_path', type=str, default=None, help='the path to save the compressed model checkpoints.`')
+    parser.add_argument('--save_path', type=str, default="/data/wanghaoxuan/SVD_Pi3_cache", help='the path to save the compressed model checkpoints.`')
     parser.add_argument('--seed',type=int, default=0, help='Seed for sampling the calibration data')
     parser.add_argument('--DEV', type=str, default="cuda", help='device')
     parser.add_argument('--model_seq_len', type=int, default=2048, help='the default sequence length of the LLM')
     parser.add_argument('--eval_batch_size', type=int, default=4, help='inference bactch size')
     parser.add_argument('--gen_seq_len', type=int, default=1024, help='generated sequence len for efficiency evaluation')
-    parser.add_argument('--step', type=int, default=4, help='the step to run the compression')
     parser.add_argument('--lora', type=str, default=None, help='the lora updated weight path to run the accuracy evaluation')
     parser.add_argument("--interval", type=int, default=-1, help="Interval to sample image. Default: 1 for images dir, 10 for video")
-    parser.add_argument("--ckpt", type=str, default=None, help="Path to the model checkpoint file. Default: None")
+    parser.add_argument("--ckpt", type=str, default="Pi3_main/pi3_model.safetensors", help="Path to the model checkpoint file. Default: None")
     parser.add_argument('--ratio', type=float, default=0.2, help='Target compression ratio,(0,1), default=0.2, means only keeping about 20% of the params.')
     parser.add_argument("--device", type=str, default='cuda', help="Device to run inference on ('cuda' or 'cpu'). Default: 'cuda'")
     parser.add_argument("--calibration_dataset_path", type=str, default="/data/wanghaoxuan/sintel", help="Path to the calibration dataset.")
 
     args = parser.parse_args()
-    args.ratio = 1- args.ratio
 
     device = torch.device(args.device)
     if args.ckpt is not None:
