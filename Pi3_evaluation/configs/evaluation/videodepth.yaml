@@ -6,7 +6,9 @@ defaults:
 name: videodepth
 
 pi3:
-  pretrained_model_name_or_path: yyfz233/Pi3
+  #pretrained_model_name_or_path: yyfz233/Pi3
+  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors
+
 
 eval_datasets:
   - sintel

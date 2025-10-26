@@ -6,10 +6,10 @@ defaults:
 name: monodepth
 
 pi3:
-  #pretrained_model_name_or_path: /mnt/extdisk1/wanghaoxuan/SVD-pi3/Pi3_main/pi3_model.safetensors
+  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.8.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.5.safetensors
-  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors
 
 

@@ -27,17 +27,21 @@ bonn:
 
 sintel:
   type: video
-  root_path: /data/wanghaoxuan/sintel/evaluation
+  root_path: /data/wanghaoxuan/sintel/training
   ls_all_seqs:
     - alley_2
+    - ambush_4
+    - ambush_5
     - ambush_6
-    - ambush_7
-    - bamboo_2
-    - bandage_2
+    - cave_2
     - cave_4
+    - market_2
+    - market_5
     - market_6
     - shaman_3
+    - sleeping_1
     - sleeping_2
+    - temple_2
     - temple_3
   img:
     path: ${data.sintel.root_path}/final/{seq}
