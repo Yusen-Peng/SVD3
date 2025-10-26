@@ -667,7 +667,7 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
         W = sanitize(W)
         U, Svals, VT = safe_svd(W)
         num_s_after_trunc = int(W.shape[0] * W.shape[1] * ratio / (W.shape[0] + W.shape[1]))
-        print(f"Layer {key}: truncate rank from {Svals.shape[0]} to {num_s_after_trunc}", flush=True)
+        print(f"🔥🔥🔥Layer {key}: truncate rank from {Svals.shape[0]} to {num_s_after_trunc}🔥", flush=True)
         U_r, S_r, VT_r = U[:, :num_s_after_trunc], Svals[:num_s_after_trunc], VT[:num_s_after_trunc, :]
 
         S_r = sanitize(S_r)
@@ -684,7 +684,7 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
             out_features=linear.out_features,
             W_u=W_u, W_v=W_v, bias=b
         ))
-    print(f"✅ Plain SVD (no whitening) low-rank replacement complete for {len(layers)} Linear layers.")
+    print(f"✅ Plain SVD (no whitening) low-rank replacement complete for {len(layers)} Linear layers.✅")
 
 def main():
     # NOTE: whether to run the baseline SVD (no whitening) mode

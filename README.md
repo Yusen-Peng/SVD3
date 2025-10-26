@@ -6,7 +6,7 @@
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
-CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --step 1 --ckpt Pi3_main/pi3_model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache
+CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.3
 ```
 
 ## LoRA finetuning
