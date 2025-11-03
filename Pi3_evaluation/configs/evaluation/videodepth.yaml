@@ -15,8 +15,8 @@ pi3:
 
 
 eval_datasets:
-  - sintel
-  # - bonn
+  # - sintel
+  - bonn
   # - kitti
 
 # align: scale

@@ -18,7 +18,7 @@ accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --
 
 ## Evaluation
 
-- [x] Monocular Depth Estimation (Sintel dataset for now)
+- [x] Monocular Depth Estimation
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
