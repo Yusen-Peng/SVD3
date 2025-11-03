@@ -25,3 +25,11 @@ accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --
 python Pi3_evaluation/monodepth/infer.py
 python Pi3_evaluation/monodepth/eval.py
 ```
+
+- [x] Video Depth Estimation
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/videodepth/infer.py
+python Pi3_evaluation/videodepth/eval.py
+```

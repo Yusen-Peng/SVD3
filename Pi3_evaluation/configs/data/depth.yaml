@@ -13,16 +13,16 @@ bonn:
   type: video
   root_path: /data/wanghaoxuan/rgbd_bonn_dataset
   ls_all_seqs:
-    - rgbd_bonn_balloon2
     - rgbd_bonn_crowd2
-    # - rgbd_bonn_crowd3 # FIXME: this sequence has some issue with ground truth files
+    - rgbd_bonn_crowd3
     - rgbd_bonn_person_tracking2
     - rgbd_bonn_synchronous
+    - rgbd_bonn_balloon2
   img:
-    path: ${data.bonn.root_path}/{seq}/rgb
+    path: ${data.bonn.root_path}/{seq}/rgb_110
     ext: png
   depth:
-    path: ${data.bonn.root_path}/{seq}/depth
+    path: ${data.bonn.root_path}/{seq}/depth_110
     ext: png
 
 sintel:
