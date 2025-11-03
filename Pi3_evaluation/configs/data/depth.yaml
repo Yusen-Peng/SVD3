@@ -1,6 +1,6 @@
 kitti:
-  type: video  # with sequences of video
-  root_path: data/kitti//depth_selection/val_selection_cropped
+  type: video
+  root_path: /data/wanghaoxuan/kitti//depth_selection/val_selection_cropped
   ls_all_seqs: ${data.kitti.root_path}/image_gathered
   img:
     path: ${data.kitti.root_path}/image_gathered/{seq}

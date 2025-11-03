@@ -17,8 +17,8 @@ pi3:
 
 eval_datasets:
   # - sintel
-  - bonn
-  # - kitti
+  # - bonn
+  - kitti
   # - nyu-v2
 
 invariant: median-scale  # using median(gt) / median(pred) as scale factor
