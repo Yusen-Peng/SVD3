@@ -1,5 +1,5 @@
 sintel:
-  root_path: /data/wanghaoxuan/sintel/training # path updated
+  root_path: /data/wanghaoxuan/sintel/training
   ls_all_seqs:
     - alley_2
     - ambush_4

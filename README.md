@@ -33,3 +33,12 @@ python Pi3_evaluation/monodepth/eval.py
 python Pi3_evaluation/videodepth/infer.py
 python Pi3_evaluation/videodepth/eval.py
 ```
+
+- [ ] camera-angular
+
+- [ ] camera-distance
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/relpose/eval_dist.py
+```
