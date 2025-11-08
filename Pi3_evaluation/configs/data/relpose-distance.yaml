@@ -27,7 +27,7 @@ sintel:
     ext: cam
 
 tum:
-  root_path: data/tum
+  root_path: /data/wanghaoxuan/tum
   ls_all_seqs: ${data.tum.root_path}
   img:
     path: ${data.tum.root_path}/{seq}/rgb_90
