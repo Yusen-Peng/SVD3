@@ -25,26 +25,25 @@
 NRGBD-sparse:
   cfg:
     _target_: datasets.nrgbd.NRGBD
-    NRGBD_DIR: data/nrgbd
+    NRGBD_DIR: /data/wanghaoxuan/neural_rgbd
     load_img_size: ${load_img_size}
-    cache_file: data/dataset_cache/nrgbd_mv_recon_cache.npy
+    cache_file: /data/wanghaoxuan/dataset_cache/nrgbd_mv_recon_cache.npy
   sampling:
     strategy: stride
     kf_every: 500  # ori setting in cut3r
     # kf_every: 100
-  seq_id_map: datasets/seq-id-maps/NRGBD_mv-recon_seq-id-map-kf500.json
+  seq_id_map: /mnt/extdisk1/wanghaoxuan/SVD-pi3/datasets/seq-id-maps/NRGBD_mv-recon_seq-id-map-kf500.json
 
 NRGBD-dense:
   cfg:
     _target_: datasets.nrgbd.NRGBD
-    NRGBD_DIR: data/nrgbd
+    NRGBD_DIR: /data/wanghaoxuan/neural_rgbd
     load_img_size: ${load_img_size}
-    cache_file: data/dataset_cache/nrgbd_mv_recon_cache.npy
+    cache_file: /data/wanghaoxuan/dataset_cache/nrgbd_mv_recon_cache.npy
   sampling:
     strategy: stride
     kf_every: 100  # our dense setting
-  seq_id_map: datasets/seq-id-maps/NRGBD_mv-recon_seq-id-map-kf100.json
-
+  seq_id_map: /mnt/extdisk1/wanghaoxuan/SVD-pi3/datasets/seq-id-maps/NRGBD_mv-recon_seq-id-map-kf100.json
 DTU:
   cfg:
     _target_: datasets.dtu.DTU
