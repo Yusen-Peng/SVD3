@@ -4,11 +4,11 @@
     split: test
     SEVENSCENES_DIR: /data/wanghaoxuan/7scenes
     load_img_size: ${load_img_size}
-    cache_file: data/dataset_cache/7scenes_mv_recon_cache.npy
+    cache_file: /data/wanghaoxuan/dataset_cache/7scenes_mv_recon_cache.npy
   sampling:
     strategy: stride
     kf_every: 200  # ori setting in cut3r
-  seq_id_map: datasets/seq-id-maps/7scenes_mv-recon_seq-id-map-kf200.json
+  seq_id_map: /mnt/extdisk1/wanghaoxuan/SVD-pi3/7scenes_mv-recon_seq-id-map-kf200.json
 
 7scenes-dense:
   cfg:
@@ -16,11 +16,11 @@
     split: test
     SEVENSCENES_DIR: /data/wanghaoxuan/7scenes
     load_img_size: ${load_img_size}
-    cache_file: data/dataset_cache/7scenes_mv_recon_cache.npy
+    cache_file: /data/wanghaoxuan/dataset_cache/7scenes_mv_recon_cache.npy
   sampling:
     strategy: stride
     kf_every: 40  # our dense setting
-  seq_id_map: datasets/seq-id-maps/7scenes_mv-recon_seq-id-map-kf40.json
+  seq_id_map: /mnt/extdisk1/wanghaoxuan/SVD-pi3/7scenes_mv-recon_seq-id-map-kf40.json
 
 NRGBD-sparse:
   cfg:

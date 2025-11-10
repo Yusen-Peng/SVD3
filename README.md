@@ -36,7 +36,7 @@ python Pi3_evaluation/videodepth/eval.py
 
 - [ ] camera-angular
 
-- [ ] camera-distance
+- [x] camera-distance
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
