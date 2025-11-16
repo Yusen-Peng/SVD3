@@ -42,3 +42,10 @@ python Pi3_evaluation/videodepth/eval.py
 # stay in 'SVD-pi3' (root directory)
 python Pi3_evaluation/relpose/eval_dist.py
 ```
+
+- [x] point-map
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/mv_recon/eval.py
+```
