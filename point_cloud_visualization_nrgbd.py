@@ -26,7 +26,7 @@ def render_pcd(ax, ply_path, point_size=0.3, elev=20, azim=45):
     ax.set_axis_off()
 
 if __name__ == "__main__":
-    MODE = 'sparse'  # 'dense' or 'sparse'
+    MODE = 'dense'  # 'dense' or 'sparse'
 
     pred_path = f"outputs/mv_recon/NRGBD-{MODE}/kitchen-pred.ply"
     gt_path = f"outputs/mv_recon/NRGBD-{MODE}/kitchen-gt.ply"
