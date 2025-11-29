@@ -6,19 +6,20 @@ defaults:
 name: monodepth
 
 pi3:
-  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.8.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.5.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors
-
+  
+  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.2.safetensors
 
 
 
 eval_datasets:
-  - sintel
+  # - sintel
   # - bonn
-  # - kitti
+  - kitti
   # - nyu-v2
 
 invariant: median-scale  # using median(gt) / median(pred) as scale factor

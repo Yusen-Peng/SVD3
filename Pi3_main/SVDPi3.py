@@ -236,291 +236,291 @@ def Pi3_profile_svdllm_low_resource(
     return profiling_mat
 
 
-@torch.no_grad()
-def Pi3_whitening(model: Pi3, profiling_mat: Dict[str, torch.Tensor], ratio: float, device=None):
-    model.eval()
+# @torch.no_grad()
+# def Pi3_whitening(model: Pi3, profiling_mat: Dict[str, torch.Tensor], ratio: float):
+#     model.eval()
     
-    # choose targets/layers (attention linear layers and MLP linear layers)
-    layers = OrderedDict()
-    # Pi3.decoder is nn.ModuleList[BlockRope]
-    for i, blk in enumerate(model.decoder):
-        blk: BlockRope = blk # type check
-        # attention
-        if hasattr(blk, "attn"):
-            attn = blk.attn
-            if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
-                layers[f"decoder.{i}.attn.qkv"] = attn.qkv
-            if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
-                layers[f"decoder.{i}.attn.proj"] = attn.proj
-        # mlp (ffn)
-        if hasattr(blk, "mlp"):
-            mlp = blk.mlp
-            if hasattr(mlp, "fc1") and isinstance(mlp.fc1, nn.Linear):
-                layers[f"decoder.{i}.mlp.fc1"] = mlp.fc1
-            if hasattr(mlp, "fc2") and isinstance(mlp.fc2, nn.Linear):
-                layers[f"decoder.{i}.mlp.fc2"] = mlp.fc2
-    print(f"Start SVD decomposition after whitening {len(layers)} Linear targets...")
+#     # choose targets/layers (attention linear layers and MLP linear layers)
+#     layers = OrderedDict()
+#     # Pi3.decoder is nn.ModuleList[BlockRope]
+#     for i, blk in enumerate(model.decoder):
+#         blk: BlockRope = blk # type check
+#         # attention
+#         if hasattr(blk, "attn"):
+#             attn = blk.attn
+#             if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
+#                 layers[f"decoder.{i}.attn.qkv"] = attn.qkv
+#             if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
+#                 layers[f"decoder.{i}.attn.proj"] = attn.proj
+#         # mlp (ffn)
+#         if hasattr(blk, "mlp"):
+#             mlp = blk.mlp
+#             if hasattr(mlp, "fc1") and isinstance(mlp.fc1, nn.Linear):
+#                 layers[f"decoder.{i}.mlp.fc1"] = mlp.fc1
+#             if hasattr(mlp, "fc2") and isinstance(mlp.fc2, nn.Linear):
+#                 layers[f"decoder.{i}.mlp.fc2"] = mlp.fc2
+#     print(f"Start SVD decomposition after whitening {len(layers)} Linear targets...")
 
-    # Caches for per-block replacements
-    svd_attn_cache: Dict[int, SVD_Pi3Attention] = {}
-    svd_mlp_cache: Dict[int, SVD_Pi3MLP] = {}
+#     # Caches for per-block replacements
+#     svd_attn_cache: Dict[int, SVD_Pi3Attention] = {}
+#     svd_mlp_cache: Dict[int, SVD_Pi3MLP] = {}
     
-    def ensure_svd_attn(block_idx: int, orig_attn) -> SVD_Pi3Attention:
-        if block_idx in svd_attn_cache:
-            return svd_attn_cache[block_idx]
-        D = orig_attn.qkv.in_features
-        H = getattr(orig_attn, "num_heads", 16)  # fallback if not present
-        # Derive ranks from the two actual matrices to be factorized when we have them
-        # We'll set temporary ranks (updated after we know per-matrix r below)
-        r_qkv = max(1, D // 4)
-        r_out = max(1, D // 4)
-        attn_drop = getattr(orig_attn, "attn_drop", 0.0)
-        proj_drop = getattr(orig_attn, "proj_drop", 0.0)
-        rope = getattr(orig_attn, "rope", None)
+#     def ensure_svd_attn(block_idx: int, orig_attn) -> SVD_Pi3Attention:
+#         if block_idx in svd_attn_cache:
+#             return svd_attn_cache[block_idx]
+#         D = orig_attn.qkv.in_features
+#         H = getattr(orig_attn, "num_heads", 16)  # fallback if not present
+#         # Derive ranks from the two actual matrices to be factorized when we have them
+#         # We'll set temporary ranks (updated after we know per-matrix r below)
+#         r_qkv = max(1, D // 4)
+#         r_out = max(1, D // 4)
+#         attn_drop = getattr(orig_attn, "attn_drop", 0.0)
+#         proj_drop = getattr(orig_attn, "proj_drop", 0.0)
+#         rope = getattr(orig_attn, "rope", None)
 
-        svd_attn = SVD_Pi3Attention(
-            embed_dim=D, num_heads=H,
-            r_qkv=r_qkv, r_out=r_out,
-            attn_drop_rate=attn_drop, proj_drop_rate=proj_drop,
-            use_bias_qkv=(orig_attn.qkv.bias is not None),
-            use_bias_out=(orig_attn.proj.bias is not None),
-            rope=rope
-        )
-        # install
-        model.decoder[block_idx].attn = svd_attn
-        svd_attn_cache[block_idx] = svd_attn
-        return svd_attn
+#         svd_attn = SVD_Pi3Attention(
+#             embed_dim=D, num_heads=H,
+#             r_qkv=r_qkv, r_out=r_out,
+#             attn_drop_rate=attn_drop, proj_drop_rate=proj_drop,
+#             use_bias_qkv=(orig_attn.qkv.bias is not None),
+#             use_bias_out=(orig_attn.proj.bias is not None),
+#             rope=rope
+#         )
+#         # install
+#         model.decoder[block_idx].attn = svd_attn
+#         svd_attn_cache[block_idx] = svd_attn
+#         return svd_attn
 
-    def ensure_svd_mlp(block_idx: int, orig_mlp) -> SVD_Pi3MLP:
-        if block_idx in svd_mlp_cache:
-            return svd_mlp_cache[block_idx]
-        D = orig_mlp.fc1.in_features
-        I = orig_mlp.fc1.out_features
-        # temporary ranks; will be overwritten by actual per-matrix r below
-        r1 = max(1, (I + D) // 8)
-        r2 = max(1, (I + D) // 8)
+#     def ensure_svd_mlp(block_idx: int, orig_mlp) -> SVD_Pi3MLP:
+#         if block_idx in svd_mlp_cache:
+#             return svd_mlp_cache[block_idx]
+#         D = orig_mlp.fc1.in_features
+#         I = orig_mlp.fc1.out_features
+#         # temporary ranks; will be overwritten by actual per-matrix r below
+#         r1 = max(1, (I + D) // 8)
+#         r2 = max(1, (I + D) // 8)
 
-        # try to detect activation
-        act_name = "gelu"
-        if hasattr(orig_mlp, "act") and isinstance(orig_mlp.act, nn.Module):
-            act_name = orig_mlp.act.__class__.__name__.lower()
+#         # try to detect activation
+#         act_name = "gelu"
+#         if hasattr(orig_mlp, "act") and isinstance(orig_mlp.act, nn.Module):
+#             act_name = orig_mlp.act.__class__.__name__.lower()
 
-        drop = getattr(orig_mlp, "drop", 0.0)
+#         drop = getattr(orig_mlp, "drop", 0.0)
 
-        svd_mlp = SVD_Pi3MLP(
-            embed_dim=D, intermediate_dim=I,
-            r_fc1=r1, r_fc2=r2,
-            activation=act_name, drop_rate=drop,
-            use_bias_fc1=(orig_mlp.fc1.bias is not None),
-            use_bias_fc2=(orig_mlp.fc2.bias is not None),
-        )
-        model.decoder[block_idx].mlp = svd_mlp
-        svd_mlp_cache[block_idx] = svd_mlp
-        return svd_mlp
+#         svd_mlp = SVD_Pi3MLP(
+#             embed_dim=D, intermediate_dim=I,
+#             r_fc1=r1, r_fc2=r2,
+#             activation=act_name, drop_rate=drop,
+#             use_bias_fc1=(orig_mlp.fc1.bias is not None),
+#             use_bias_fc2=(orig_mlp.fc2.bias is not None),
+#         )
+#         model.decoder[block_idx].mlp = svd_mlp
+#         svd_mlp_cache[block_idx] = svd_mlp
+#         return svd_mlp
 
-    def whiten_svd_factor(
-        key: str,
-        linear: nn.Linear,
-        profiling_mat: Dict[str, torch.Tensor],
-        ratio: float,
-        dev: torch.device
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Robust whitening + SVD factorization for a single Linear layer.
-        Returns (svd_u, svd_v, bias), with balanced sqrt(S) split.
-        Handles:
-        - vector/diag and full scale matrices
-        - singular / ill-conditioned scales via clamping
-        - non-finite values via sanitization
-        - SVD solver issues via dtype/CPU fallback and PCA fallback
-        """
+#     def whiten_svd_factor(
+#         key: str,
+#         linear: nn.Linear,
+#         profiling_mat: Dict[str, torch.Tensor],
+#         ratio: float,
+#         dev: torch.device
+#     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+#         """
+#         Robust whitening + SVD factorization for a single Linear layer.
+#         Returns (svd_u, svd_v, bias), with balanced sqrt(S) split.
+#         Handles:
+#         - vector/diag and full scale matrices
+#         - singular / ill-conditioned scales via clamping
+#         - non-finite values via sanitization
+#         - SVD solver issues via dtype/CPU fallback and PCA fallback
+#         """
 
-        def trunc_rank(m: int, n: int, r: float) -> int:
-            rr = int((m * n * r) / (m + n))
-            return max(1, min(rr, min(m, n)))
+#         def trunc_rank(m: int, n: int, r: float) -> int:
+#             rr = int((m * n * r) / (m + n))
+#             return max(1, min(rr, min(m, n)))
 
-        def is_diag_matrix(M: torch.Tensor) -> bool:
-            return (
-                M.dim() == 2 and M.shape[0] == M.shape[1] and
-                torch.allclose(M, torch.diag(torch.diagonal(M)), atol=1e-6, rtol=0)
-            )
+#         def is_diag_matrix(M: torch.Tensor) -> bool:
+#             return (
+#                 M.dim() == 2 and M.shape[0] == M.shape[1] and
+#                 torch.allclose(M, torch.diag(torch.diagonal(M)), atol=1e-6, rtol=0)
+#             )
 
-        def sanitize(t: torch.Tensor, replace: float = 0.0) -> torch.Tensor:
-            # Replace NaN/Inf with finite values
-            t = t.clone()
-            mask = ~torch.isfinite(t)
-            if mask.any():
-                t[mask] = replace
-            return t
+#         def sanitize(t: torch.Tensor, replace: float = 0.0) -> torch.Tensor:
+#             # Replace NaN/Inf with finite values
+#             t = t.clone()
+#             mask = ~torch.isfinite(t)
+#             if mask.any():
+#                 t[mask] = replace
+#             return t
 
-        def add_jitter(M: torch.Tensor, scale: float = 1e-8) -> torch.Tensor:
-            # For rectangular M, add tiny Gaussian noise scaled by Fro norm
-            fro = torch.linalg.norm(M).item()
-            eps = scale * (fro if fro > 0 else 1.0)
-            noise = torch.empty_like(M).normal_(mean=0.0, std=eps)
-            return M + noise
+#         def add_jitter(M: torch.Tensor, scale: float = 1e-8) -> torch.Tensor:
+#             # For rectangular M, add tiny Gaussian noise scaled by Fro norm
+#             fro = torch.linalg.norm(M).item()
+#             eps = scale * (fro if fro > 0 else 1.0)
+#             noise = torch.empty_like(M).normal_(mean=0.0, std=eps)
+#             return M + noise
 
-        def safe_svd(M: torch.Tensor):
-            # Try FP32 on device
-            try:
-                return torch.linalg.svd(M, full_matrices=False)
-            except Exception:
-                pass
-            # Try FP64 on device
-            try:
-                return torch.linalg.svd(M.to(torch.float64), full_matrices=False)
-            except Exception:
-                pass
-            # Try CPU FP64
-            try:
-                U, S, VT = torch.linalg.svd(M.detach().cpu().to(torch.float64), full_matrices=False)
-                return U.to(M.device, dtype=M.dtype), S.to(M.device, dtype=M.dtype), VT.to(M.device, dtype=M.dtype)
-            except Exception:
-                raise RuntimeError("SVD failed on device and CPU in both float32 and float64. Bad times!")
+#         def safe_svd(M: torch.Tensor):
+#             # Try FP32 on device
+#             try:
+#                 return torch.linalg.svd(M, full_matrices=False)
+#             except Exception:
+#                 pass
+#             # Try FP64 on device
+#             try:
+#                 return torch.linalg.svd(M.to(torch.float64), full_matrices=False)
+#             except Exception:
+#                 pass
+#             # Try CPU FP64
+#             try:
+#                 U, S, VT = torch.linalg.svd(M.detach().cpu().to(torch.float64), full_matrices=False)
+#                 return U.to(M.device, dtype=M.dtype), S.to(M.device, dtype=M.dtype), VT.to(M.device, dtype=M.dtype)
+#             except Exception:
+#                 raise RuntimeError("SVD failed on device and CPU in both float32 and float64. Bad times!")
 
-        W = linear.weight.data.float().to(dev)          # (out, in)
-        W = sanitize(W)
-        dtype = linear.weight.dtype
+#         W = linear.weight.data.float().to(dev)          # (out, in)
+#         W = sanitize(W)
+#         dtype = linear.weight.dtype
 
-        Sraw = profiling_mat[key].to(dev).float()
-        Sraw = sanitize(Sraw)
+#         Sraw = profiling_mat[key].to(dev).float()
+#         Sraw = sanitize(Sraw)
 
-        out_dim, in_dim = W.shape
-        eps_abs = 1e-6
-        eps_rel = 1e-4
+#         out_dim, in_dim = W.shape
+#         eps_abs = 1e-6
+#         eps_rel = 1e-4
 
-        if Sraw.dim() == 1 or is_diag_matrix(Sraw):
-            # ----- diagonal / vector path -----
-            s = Sraw if Sraw.dim() == 1 else torch.diagonal(Sraw)   # (in,)
-            s = sanitize(s)
-            s_absmax = s.abs().max()
-            floor = max(eps_abs, float(eps_rel) * float(s_absmax)) if s_absmax > 0 else eps_abs
-            s_safe = torch.clamp(s, min=floor)
+#         if Sraw.dim() == 1 or is_diag_matrix(Sraw):
+#             # ----- diagonal / vector path -----
+#             s = Sraw if Sraw.dim() == 1 else torch.diagonal(Sraw)   # (in,)
+#             s = sanitize(s)
+#             s_absmax = s.abs().max()
+#             floor = max(eps_abs, float(eps_rel) * float(s_absmax)) if s_absmax > 0 else eps_abs
+#             s_safe = torch.clamp(s, min=floor)
 
-            # W_scale = W @ diag(s)  (column-wise scaling)
-            W_scale = W * s_safe.unsqueeze(0)
-            W_scale = sanitize(W_scale)
-            if not torch.isfinite(W_scale).all():
-                W_scale = add_jitter(W_scale, scale=1e-8)
+#             # W_scale = W @ diag(s)  (column-wise scaling)
+#             W_scale = W * s_safe.unsqueeze(0)
+#             W_scale = sanitize(W_scale)
+#             if not torch.isfinite(W_scale).all():
+#                 W_scale = add_jitter(W_scale, scale=1e-8)
 
-            U, Svals, VT = safe_svd(W_scale)
+#             U, Svals, VT = safe_svd(W_scale)
 
-            r = trunc_rank(out_dim, in_dim, ratio)
-            r = min(r, U.shape[1], VT.shape[0], Svals.shape[0])
-            U_r, S_r, VT_r = U[:, :r], Svals[:r], VT[:r, :]
+#             r = trunc_rank(out_dim, in_dim, ratio)
+#             r = min(r, U.shape[1], VT.shape[0], Svals.shape[0])
+#             U_r, S_r, VT_r = U[:, :r], Svals[:r], VT[:r, :]
 
-            inv_s = 1.0 / s_safe
-            V_r = VT_r * inv_s.unsqueeze(0)  # undo whitening on V
+#             inv_s = 1.0 / s_safe
+#             V_r = VT_r * inv_s.unsqueeze(0)  # undo whitening on V
 
-        else:
-            # ----- full matrix path (symmetric EVD + clamping) -----
-            S = Sraw
-            if S.shape != (in_dim, in_dim):
-                raise ValueError(f"Scale matrix shape {S.shape} != ({in_dim},{in_dim})")
+#         else:
+#             # ----- full matrix path (symmetric EVD + clamping) -----
+#             S = Sraw
+#             if S.shape != (in_dim, in_dim):
+#                 raise ValueError(f"Scale matrix shape {S.shape} != ({in_dim},{in_dim})")
 
-            # Symmetrize & sanitize
-            S_sym = 0.5 * (S + S.transpose(-1, -2))
-            S_sym = sanitize(S_sym)
+#             # Symmetrize & sanitize
+#             S_sym = 0.5 * (S + S.transpose(-1, -2))
+#             S_sym = sanitize(S_sym)
 
-            # eigh with fallback
-            try:
-                evals, Q = torch.linalg.eigh(S_sym)
-            except Exception:
-                evals, Q = torch.linalg.eigh(S_sym.detach().cpu().to(torch.float64))
-                evals = evals.to(dev).to(torch.float32)
-                Q = Q.to(dev).to(torch.float32)
+#             # eigh with fallback
+#             try:
+#                 evals, Q = torch.linalg.eigh(S_sym)
+#             except Exception:
+#                 evals, Q = torch.linalg.eigh(S_sym.detach().cpu().to(torch.float64))
+#                 evals = evals.to(dev).to(torch.float32)
+#                 Q = Q.to(dev).to(torch.float32)
 
-            evals = sanitize(evals)
-            Q = sanitize(Q)
-            lam_max = evals.abs().max()
-            floor = max(eps_abs, float(eps_rel) * float(lam_max)) if lam_max > 0 else eps_abs
-            lam = torch.clamp(evals, min=floor)  # (in,)
+#             evals = sanitize(evals)
+#             Q = sanitize(Q)
+#             lam_max = evals.abs().max()
+#             floor = max(eps_abs, float(eps_rel) * float(lam_max)) if lam_max > 0 else eps_abs
+#             lam = torch.clamp(evals, min=floor)  # (in,)
 
-            # Apply S on input side efficiently:
-            # W_scale = (W @ Q) * lam  @ Q^T
-            WQ = sanitize(W @ Q)
-            W_scale = sanitize((WQ * lam.unsqueeze(0)) @ Q.transpose(-1, -2))
-            if not torch.isfinite(W_scale).all():
-                W_scale = add_jitter(W_scale, scale=1e-8)
+#             # Apply S on input side efficiently:
+#             # W_scale = (W @ Q) * lam  @ Q^T
+#             WQ = sanitize(W @ Q)
+#             W_scale = sanitize((WQ * lam.unsqueeze(0)) @ Q.transpose(-1, -2))
+#             if not torch.isfinite(W_scale).all():
+#                 W_scale = add_jitter(W_scale, scale=1e-8)
 
-            U, Svals, VT = safe_svd(W_scale)
+#             U, Svals, VT = safe_svd(W_scale)
 
-            r = trunc_rank(out_dim, in_dim, ratio)
-            r = min(r, U.shape[1], VT.shape[0], Svals.shape[0])
-            U_r, S_r, VT_r = U[:, :r], Svals[:r], VT[:r, :]
+#             r = trunc_rank(out_dim, in_dim, ratio)
+#             r = min(r, U.shape[1], VT.shape[0], Svals.shape[0])
+#             U_r, S_r, VT_r = U[:, :r], Svals[:r], VT[:r, :]
 
-            # Undo whitening on V via eigen-structure: Sinv = Q diag(1/lam) Q^T
-            inv_lam = 1.0 / lam
-            VTQ = sanitize(VT_r @ Q)
-            V_r = sanitize((VTQ * inv_lam.unsqueeze(0)) @ Q.transpose(-1, -2))
-        S_r = sanitize(S_r)
-        sqrtS = torch.sqrt(torch.clamp(S_r, min=0.0) + 1e-12)
-        svd_u = U_r * sqrtS.unsqueeze(0)     # (out, r)
-        svd_v = sqrtS.unsqueeze(1) * V_r     # (r, in)
-        svd_u = svd_u.detach().cpu().to(dtype)
-        svd_v = svd_v.detach().cpu().to(dtype)
-        bias = linear.bias.detach().cpu().to(dtype) if linear.bias is not None else None
-        assert svd_u.shape[0] == out_dim, f"svd_u rows {svd_u.shape[0]} != out {out_dim}"
-        assert svd_v.shape[1] == in_dim, f"svd_v cols {svd_v.shape[1]} != in {in_dim}"
-        return svd_u, svd_v, bias
+#             # Undo whitening on V via eigen-structure: Sinv = Q diag(1/lam) Q^T
+#             inv_lam = 1.0 / lam
+#             VTQ = sanitize(VT_r @ Q)
+#             V_r = sanitize((VTQ * inv_lam.unsqueeze(0)) @ Q.transpose(-1, -2))
+#         S_r = sanitize(S_r)
+#         sqrtS = torch.sqrt(torch.clamp(S_r, min=0.0) + 1e-12)
+#         svd_u = U_r * sqrtS.unsqueeze(0)     # (out, r)
+#         svd_v = sqrtS.unsqueeze(1) * V_r     # (r, in)
+#         svd_u = svd_u.detach().cpu().to(dtype)
+#         svd_v = svd_v.detach().cpu().to(dtype)
+#         bias = linear.bias.detach().cpu().to(dtype) if linear.bias is not None else None
+#         assert svd_u.shape[0] == out_dim, f"svd_u rows {svd_u.shape[0]} != out {out_dim}"
+#         assert svd_v.shape[1] == in_dim, f"svd_v cols {svd_v.shape[1]} != in {in_dim}"
+#         return svd_u, svd_v, bias
 
-    for key, linear in tqdm(layers.items()):
-        parts = key.split(".")  # ["decoder", "{i}", "attn"/"mlp", leaf]
-        i = int(parts[1])
-        sub = parts[2]
-        leaf = parts[3]
+#     for key, linear in tqdm(layers.items()):
+#         parts = key.split(".")  # ["decoder", "{i}", "attn"/"mlp", leaf]
+#         i = int(parts[1])
+#         sub = parts[2]
+#         leaf = parts[3]
 
-        svd_u, svd_v, bias = whiten_svd_factor(key, linear, profiling_mat, ratio, dev)
+#         svd_u, svd_v, bias = whiten_svd_factor(key, linear, profiling_mat, ratio, dev)
 
-        if sub == "attn":
-            orig_attn = getattr(model.decoder[i], "attn")
-            svd_attn = ensure_svd_attn(i, orig_attn)
+#         if sub == "attn":
+#             orig_attn = getattr(model.decoder[i], "attn")
+#             svd_attn = ensure_svd_attn(i, orig_attn)
 
-            if leaf == "qkv":
-                # update ranks to match actual factor dims
-                svd_attn.qkv_u = nn.Linear(svd_v.shape[0], 3 * svd_attn.embed_dim, bias=(svd_attn.qkv_u.bias is not None))
-                svd_attn.qkv_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
-                svd_attn.qkv_u.weight.data.copy_(svd_u)
-                svd_attn.qkv_v.weight.data.copy_(svd_v)
-                if svd_attn.qkv_u.bias is not None and bias is not None:
-                    svd_attn.qkv_u.bias.data.copy_(bias)
+#             if leaf == "qkv":
+#                 # update ranks to match actual factor dims
+#                 svd_attn.qkv_u = nn.Linear(svd_v.shape[0], 3 * svd_attn.embed_dim, bias=(svd_attn.qkv_u.bias is not None))
+#                 svd_attn.qkv_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
+#                 svd_attn.qkv_u.weight.data.copy_(svd_u)
+#                 svd_attn.qkv_v.weight.data.copy_(svd_v)
+#                 if svd_attn.qkv_u.bias is not None and bias is not None:
+#                     svd_attn.qkv_u.bias.data.copy_(bias)
 
-            elif leaf == "proj":
-                svd_attn.o_u = nn.Linear(svd_v.shape[0], svd_attn.embed_dim, bias=(svd_attn.o_u.bias is not None))
-                svd_attn.o_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
-                svd_attn.o_u.weight.data.copy_(svd_u)
-                svd_attn.o_v.weight.data.copy_(svd_v)
-                if svd_attn.o_u.bias is not None and bias is not None:
-                    svd_attn.o_u.bias.data.copy_(bias)
+#             elif leaf == "proj":
+#                 svd_attn.o_u = nn.Linear(svd_v.shape[0], svd_attn.embed_dim, bias=(svd_attn.o_u.bias is not None))
+#                 svd_attn.o_v = nn.Linear(svd_attn.embed_dim, svd_v.shape[0], bias=False)
+#                 svd_attn.o_u.weight.data.copy_(svd_u)
+#                 svd_attn.o_v.weight.data.copy_(svd_v)
+#                 if svd_attn.o_u.bias is not None and bias is not None:
+#                     svd_attn.o_u.bias.data.copy_(bias)
 
-        elif sub == "mlp":
-            svd_mlp = ensure_svd_mlp(i, getattr(model.decoder[i], "mlp"))
+#         elif sub == "mlp":
+#             svd_mlp = ensure_svd_mlp(i, getattr(model.decoder[i], "mlp"))
 
-            in_f  = linear.in_features
-            out_f = linear.out_features
-            has_bias = (linear.bias is not None)
+#             in_f  = linear.in_features
+#             out_f = linear.out_features
+#             has_bias = (linear.bias is not None)
 
-            if leaf == "fc1":
-                # rebuild with dims taken from the *current* linear
-                svd_mlp.fc1_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
-                svd_mlp.fc1_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
-                svd_mlp.fc1_u.weight.data.copy_(svd_u)
-                svd_mlp.fc1_v.weight.data.copy_(svd_v)
-                if has_bias:
-                    svd_mlp.fc1_u.bias.data.copy_(bias)
+#             if leaf == "fc1":
+#                 # rebuild with dims taken from the *current* linear
+#                 svd_mlp.fc1_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
+#                 svd_mlp.fc1_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
+#                 svd_mlp.fc1_u.weight.data.copy_(svd_u)
+#                 svd_mlp.fc1_v.weight.data.copy_(svd_v)
+#                 if has_bias:
+#                     svd_mlp.fc1_u.bias.data.copy_(bias)
 
-            elif leaf == "fc2":
-                svd_mlp.fc2_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
-                svd_mlp.fc2_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
-                svd_mlp.fc2_u.weight.data.copy_(svd_u)
-                svd_mlp.fc2_v.weight.data.copy_(svd_v)
-                if has_bias:
-                    svd_mlp.fc2_u.bias.data.copy_(bias)
+#             elif leaf == "fc2":
+#                 svd_mlp.fc2_u = nn.Linear(svd_v.shape[0], out_f, bias=has_bias)
+#                 svd_mlp.fc2_v = nn.Linear(in_f,            svd_v.shape[0], bias=False)
+#                 svd_mlp.fc2_u.weight.data.copy_(svd_u)
+#                 svd_mlp.fc2_v.weight.data.copy_(svd_v)
+#                 if has_bias:
+#                     svd_mlp.fc2_u.bias.data.copy_(bias)
 
-                del svd_u, svd_v, bias
-                torch.cuda.empty_cache()
+#                 del svd_u, svd_v, bias
+#                 torch.cuda.empty_cache()
 
-    print(f"✅ Pi3 whitening + SVD low-rank replacement complete for {len(layers)} Linear layers.")
+#     print(f"✅ Pi3 whitening + SVD low-rank replacement complete for {len(layers)} Linear layers.")
 
 
 class TwoFactorLinear(nn.Module):
@@ -615,6 +615,156 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
         ))
     print(f"✅ Plain SVD (no whitening) low-rank replacement complete for {len(layers)} Linear layers.✅")
 
+
+@torch.no_grad()
+def Pi3_whitening(
+    model: Pi3,
+    profiling_mat: Dict[str, torch.Tensor],
+    ratio: float,
+    device=None,
+    eps: float = 1e-6,
+):
+    """
+    Low-rank SVD compression with activation-aware whitening.
+    profiling_mat[key] = L such that  Σ ≈ L @ L^T.
+    """
+    model.eval()
+    dev = torch.device(device) if device is not None else next(model.parameters()).device
+
+    # 1) Collect same target linear layers as baseline
+    layers = OrderedDict()
+    for i, blk in enumerate(model.decoder):
+        # attention
+        if hasattr(blk, "attn"):
+            attn = blk.attn
+            if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
+                layers[f"decoder.{i}.attn.qkv"] = attn.qkv
+            if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
+                layers[f"decoder.{i}.attn.proj"] = attn.proj
+        # mlp
+        if hasattr(blk, "mlp"):
+            mlp = blk.mlp
+            if hasattr(mlp, "fc1") and isinstance(mlp.fc1, nn.Linear):
+                layers[f"decoder.{i}.mlp.fc1"] = mlp.fc1
+            if hasattr(mlp, "fc2") and isinstance(mlp.fc2, nn.Linear):
+                layers[f"decoder.{i}.mlp.fc2"] = mlp.fc2
+
+    print(f"Start whitening-aware SVD for {len(layers)} Linear targets...")
+
+    fail_case = 0
+
+    for key, linear in tqdm(layers.items()):
+        linear: nn.Linear = linear
+        parts = key.split(".")
+        leaf = parts[3]
+
+        # --- 1) Weight ---
+        W = linear.weight.data.to(dev).float()    # (out, in)
+        W = sanitize(W)
+        m, n = W.shape
+
+        # --- 2) Whitening L for this layer ---
+        L = profiling_mat[key].to(dev).float()    # (in, in)
+
+
+        # --- 3) Build covariance Σ = L L^T and its ±1/2 powers ---
+        Sigma = L @ L.T                           # (in, in)
+        Sigma = 0.5 * (Sigma + Sigma.T)           # force symmetry
+
+        # eig Σ (SAFE — Σ is symmetric)
+        try:
+            evals, Q = torch.linalg.eigh(Sigma)
+        except Exception:
+            # Whitening failed — fallback to plain SVD
+            fail_case += 1
+            print(f"[WARN] eigh(Σ) failed for {key}, using plain SVD.", flush=True)
+            U, Svals, VT = safe_svd(W)
+            r = trunc_rank(m, n, ratio)
+            r = min(r, Svals.shape[0])
+            U_r  = U[:, :r]
+            S_r  = sanitize(Svals[:r])
+            VT_r = VT[:r, :]
+            W_u = (U_r * S_r.unsqueeze(0)).detach()
+            W_v = VT_r.detach()
+            # install layer and continue
+            target_device = linear.weight.device
+            target_dtype  = linear.weight.dtype
+            W_u = W_u.to(target_device, dtype=target_dtype)
+            W_v = W_v.to(target_device, dtype=target_dtype)
+            b = (
+                linear.bias.detach().to(target_device, dtype=target_dtype)
+                if linear.bias is not None else None
+            )
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            setattr(parent, leaf,
+                TwoFactorLinear(
+                    in_features=linear.in_features,
+                    out_features=linear.out_features,
+                    W_u=W_u, W_v=W_v, bias=b
+                )
+            )
+            continue
+
+        # clamp eigenvalues to avoid singular whitening
+        evals = sanitize(evals)
+        mu = evals.abs().max().item()
+        floor = eps * max(1.0, mu)
+        lam = torch.clamp(evals, min=floor)
+
+        sqrt_lam     = torch.sqrt(lam)
+        inv_sqrt_lam = 1.0 / sqrt_lam
+
+        Sigma_half      = Q @ torch.diag(sqrt_lam)     @ Q.T   # Σ^{1/2}
+        Sigma_minushalf = Q @ torch.diag(inv_sqrt_lam) @ Q.T   # Σ^{-1/2}
+
+        # --- 4) Whitening-aware SVD: SVD(W @ Σ^{1/2}) ---
+        M = W @ Sigma_half
+        U, Svals, VT = safe_svd(M)
+
+        r = trunc_rank(m, n, ratio)
+        r = min(r, Svals.shape[0])
+        print(f"🔥 [Whitening] Layer {key}: rank {Svals.shape[0]} → {r}")
+
+        U_r  = U[:, :r]
+        S_r  = sanitize(Svals[:r])
+        VT_r = VT[:r, :]
+
+        # --- 5) Unwhiten (exact SVD-LLM math) ---
+        # W_r ≈ U_r S_r VT_r Σ^{-1/2}
+        W_u = (U_r * S_r.unsqueeze(0)).detach()        # (out, r)
+        W_v = (VT_r @ Sigma_minushalf).detach()        # (r, in)
+
+        # --- 6) Install compressed layer ---
+        target_device = linear.weight.device
+        target_dtype  = linear.weight.dtype
+        W_u = W_u.to(target_device, dtype=target_dtype)
+        W_v = W_v.to(target_device, dtype=target_dtype)
+
+        b = (
+            linear.bias.detach().to(target_device, dtype=target_dtype)
+            if linear.bias is not None else None
+        )
+
+        parent = model
+        for p in parts[:-1]:
+            parent = getattr(parent, p)
+
+        setattr(
+            parent,
+            leaf,
+            TwoFactorLinear(
+                in_features=linear.in_features,
+                out_features=linear.out_features,
+                W_u=W_u,
+                W_v=W_v,
+                bias=b,
+            ),
+        )
+
+    print(f"✅ {fail_case} out of {len(layers)} layers fell back to plain SVD without whitening.✅")
+
 def main():
 
 
@@ -673,10 +823,8 @@ def main():
         # derive the whitening matrix via profiling
         profiling_mat = Pi3_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
 
-        return
-
         # apply whitening
-        Pi3_whitening(model, profiling_mat, args.ratio, args.DEV)
+        Pi3_whitening(model, profiling_mat, args.ratio)
 
         # save the model using accelerate
         accelerator = Accelerator()
