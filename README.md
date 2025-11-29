@@ -2,12 +2,24 @@
 
 ![alt text](docs/SVD_Pi3.png)
 
+## Direct SVD baseline
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --baseline
+```
+
 ## Truncation-aware data whitening
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
-CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.3
+CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/sintel --whitening_nsamples 256
 ```
+
+```csharp
+✅56/144 succeeded with Cholesky, 88/144 used EVD fallback
+```
+
 
 ## LoRA finetuning
 

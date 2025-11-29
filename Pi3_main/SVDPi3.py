@@ -20,7 +20,7 @@ from tqdm import tqdm
 import torch
 from accelerate import Accelerator
 import torch.nn as nn
-import csv
+from torch.utils.hooks import RemovableHandle
 from pi3.utils.basic import load_images_as_tensor, write_ply
 from pi3.utils.geometry import depth_edge
 from pi3.models.pi3 import Pi3
@@ -28,15 +28,10 @@ from pi3.models.layers.block import BlockRope
 from SVD_LLM.component.svd_pi3 import SVD_Pi3Attention, SVD_Pi3MLP
 from SVD_LLM.utils.data_utils import *
 from SVD_LLM.utils.model_utils import *
-from fvcore.nn import FlopCountAnalysis
-import torch.profiler as prof
 import random
 from typing import List, Dict, Optional
 from PIL import Image
 from torchvision import transforms
-
-IMG_EXTS = (".png", ".jpg", ".jpeg", ".bmp", ".tiff")
-RGB_MODALITIES = ["final"]
 
 def collect_sintel_frames(root: str, split: str, folder: str) -> List[str]:
     """Return list of frame paths under e.g. training/clean/alley_1/*.png."""
@@ -56,7 +51,7 @@ def collect_sintel_frames(root: str, split: str, folder: str) -> List[str]:
         if not os.path.isdir(scene_dir):
             continue
         for fn in sorted(os.listdir(scene_dir)):
-            if fn.lower().endswith(IMG_EXTS):
+            if fn.lower().endswith(".png"):
                 frames.append(os.path.join(scene_dir, fn))
     return frames
 
@@ -77,73 +72,17 @@ def Pi3_get_calib_train_data(
     nsamples: int = 256,
     batch_size: int = 8,
     image_size: int = 224,
-    sampling_stride: int = 1,
     split: str = "training",
-    seed: int = 3,
-    cache_dir: str = "/data/wanghaoxuan/SVD_Pi3_cache",
+    seed: int = 3
 ) -> List[Dict[str, torch.Tensor]]:
-    os.makedirs(cache_dir, exist_ok=True)
-    cache_file = os.path.join(
-        cache_dir,
-        f"sintel_{split}_ALLMODS_{nsamples}_{image_size}_{batch_size}_{sampling_stride}_{seed}.pt"
-    )
-    if os.path.exists(cache_file):
-        print(f"[💥WARNING💥] Loading cached calibration data from {cache_file}...")
-        return torch.load(cache_file)
-    else:
-        print(f"[NOTE] Building new calibration data and caching to {cache_file}...")
+    # collect all frames        
+    frames = collect_sintel_frames(root, split, "final")
+    print(f"🍑there are {len(frames)} total frames from Sintel {split} set.")
 
+    # sample `nsamples` frames randomly
     random.seed(seed)
     torch.manual_seed(seed)
-
-    # collect strided frames per modality
-    frames_per_mod = {}
-    for mod in RGB_MODALITIES:
-        frames = collect_sintel_frames(root, split, mod)
-        strided = frames[::max(1, sampling_stride)] or frames
-        frames_per_mod[mod] = strided
-
-    # allocate samples evenly (roughly) across modalities
-    base = nsamples // len(RGB_MODALITIES)
-    rem = nsamples % len(RGB_MODALITIES)
-    per_mod_quota = {m: base + (i < rem) for i, m in enumerate(RGB_MODALITIES)}
-
-    # sample frames per modality, with replacement if needed
-    # sample frames per modality with exact-size guarantee
-    chosen = []
-    leftovers = []   # unused frames to backfill from
-    deficit = 0
-
-    for mod in RGB_MODALITIES:
-        pool = frames_per_mod[mod]
-        q = per_mod_quota[mod]
-
-        if not pool:
-            deficit += q
-            continue
-
-        if len(pool) >= q:
-            picks = random.sample(pool, q)        # unique picks from this modality
-            chosen.extend(picks)
-            # keep remaining frames for possible backfill
-            leftovers.extend([p for p in pool if p not in picks])
-        else:
-            # take all we have, note how many we still owe
-            chosen.extend(pool)
-            deficit += (q - len(pool))
-            # no leftovers from this modality (exhausted)
-
-    # backfill any shortfall from leftovers; if still short, from all frames
-    if len(chosen) < nsamples:
-        global_pool = leftovers if leftovers else sum(frames_per_mod.values(), [])
-        while len(chosen) < nsamples and global_pool:
-            chosen.append(random.choice(global_pool))
-
-    # safety cap (shouldn’t trigger unless quotas changed upstream)
-    if len(chosen) > nsamples:
-        chosen = random.sample(chosen, nsamples)
-
-    random.shuffle(chosen)
+    chosen = random.sample(frames, nsamples) if len(frames) >= nsamples else random.choices(frames, k=nsamples)
 
     # image preprocessing + batching
     to_tensor = build_transform(image_size=image_size, center_crop=True)
@@ -162,7 +101,8 @@ def Pi3_get_calib_train_data(
             traindataset.append({"pixel_values": pixel_values})
             batch_imgs = None
 
-    torch.save(traindataset, cache_file)
+    # save the dataset
+    torch.save(traindataset, f"/data/wanghaoxuan/SVD_Pi3_cache/sintel_pi3_calib_nsamples{nsamples}_size{image_size}_seed{seed}.pt")
     return traindataset
 
 def sync():
@@ -178,37 +118,26 @@ def Pi3_profile_svdllm_low_resource(
     dtype: torch.dtype = torch.float16,
     eps: float = 1e-6,
 ) -> Dict[str, torch.Tensor]:
-    """
-    Stream calibration data through Pi3 and compute per-module whitening factors.
-
-    Returns
-    -------
-    profiling_mat: Dict[str, Tensor]
-        Maps module_key -> Cholesky factor L of covariance (so that Cov ≈ L @ L^T).
-    """
     model.eval().to(device)
 
-    # choose targets (attention linear layers and MLP linear layers)
+    # collect target Linear layers
     targets = OrderedDict()
-    # Pi3.decoder is nn.ModuleList[BlockRope]
     for i, blk in enumerate(model.decoder):
-        blk: BlockRope = blk # type check
-        # attention
+        blk: BlockRope = blk
         if hasattr(blk, "attn"):
             attn = blk.attn
-            if hasattr(attn, "qkv") and isinstance(attn.qkv, nn.Linear):
+            if isinstance(getattr(attn, "qkv", None), nn.Linear):
                 targets[f"decoder.{i}.attn.qkv"] = attn.qkv
-            if hasattr(attn, "proj") and isinstance(attn.proj, nn.Linear):
+            if isinstance(getattr(attn, "proj", None), nn.Linear):
                 targets[f"decoder.{i}.attn.proj"] = attn.proj
-        # mlp (ffn)
         if hasattr(blk, "mlp"):
             mlp = blk.mlp
-            if hasattr(mlp, "fc1") and isinstance(mlp.fc1, nn.Linear):
+            if isinstance(getattr(mlp, "fc1", None), nn.Linear):
                 targets[f"decoder.{i}.mlp.fc1"] = mlp.fc1
-            if hasattr(mlp, "fc2") and isinstance(mlp.fc2, nn.Linear):
+            if isinstance(getattr(mlp, "fc2", None), nn.Linear):
                 targets[f"decoder.{i}.mlp.fc2"] = mlp.fc2
-    
-    print(f"✅Found {len(targets)} Linear targets in Pi3.decoder to whiten")
+
+    print(f"✅ Found {len(targets)} Linear targets in Pi3.decoder to whiten")
 
     # initialize per-module accumulators
     # G = X^T * X, N = total rows collected
@@ -291,7 +220,7 @@ def Pi3_profile_svdllm_low_resource(
             L = torch.linalg.cholesky(cov_j)
         except Exception:
             fail_case += 1
-            evals, Q = torch.linalg.eigh(cov)  # CPU, float64, symmetric
+            evals, Q = torch.linalg.eigh(cov_j)
             lam = torch.clamp(evals, min=base_eps)
             L = Q @ torch.diag(torch.sqrt(lam))
 
@@ -687,8 +616,7 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
     print(f"✅ Plain SVD (no whitening) low-rank replacement complete for {len(layers)} Linear layers.✅")
 
 def main():
-    # NOTE: whether to run the baseline SVD (no whitening) mode
-    BASELINE = True
+
 
     parser = argparse.ArgumentParser()
 
@@ -701,6 +629,7 @@ def main():
     parser.add_argument('--save_path', type=str, default="/data/wanghaoxuan/SVD_Pi3_cache", help='the path to save the compressed model checkpoints.`')
     parser.add_argument('--seed',type=int, default=0, help='Seed for sampling the calibration data')
     parser.add_argument('--DEV', type=str, default="cuda", help='device')
+    parser.add_argument('--baseline', action='store_true', help='whether to run the baseline SVD (no whitening) mode')
     parser.add_argument('--model_seq_len', type=int, default=2048, help='the default sequence length of the LLM')
     parser.add_argument('--eval_batch_size', type=int, default=4, help='inference bactch size')
     parser.add_argument('--gen_seq_len', type=int, default=1024, help='generated sequence len for efficiency evaluation')
@@ -712,6 +641,9 @@ def main():
     parser.add_argument("--calibration_dataset_path", type=str, default="/data/wanghaoxuan/sintel", help="Path to the calibration dataset.")
 
     args = parser.parse_args()
+    # NOTE: whether to run the baseline SVD (no whitening) mode
+    BASELINE = args.baseline
+    print(f"Running Pi3 compression with ratio={args.ratio}, baseline mode={BASELINE}")
 
     device = torch.device(args.device)
     if args.ckpt is not None:
@@ -736,10 +668,12 @@ def main():
             root=args.calibration_dataset_path,
             nsamples=args.whitening_nsamples
         )
-        print(f"✅ collected {len(cali_white_data)} calibration batches (~{sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
+        print(f"✅ collected {len(cali_white_data)} calibration batches with a total {sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
 
         # derive the whitening matrix via profiling
         profiling_mat = Pi3_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
+
+        return
 
         # apply whitening
         Pi3_whitening(model, profiling_mat, args.ratio, args.DEV)
