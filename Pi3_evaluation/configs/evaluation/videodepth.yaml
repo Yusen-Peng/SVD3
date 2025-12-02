@@ -12,13 +12,15 @@ pi3:
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors
 
-  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.2.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.2.safetensors
+  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.2_ALL.safetensors
+
 
 
 eval_datasets:
-  # - sintel
+  - sintel
   # - bonn
-  - kitti
+  # - kitti
 
 # align: scale
 align: scale&shift
