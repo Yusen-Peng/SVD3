@@ -11,105 +11,19 @@ current_path = os.path.dirname(os.path.abspath(__file__))
 parent_path  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_path not in sys.path:
     sys.path.insert(0, parent_path)
-import pandas as pd
 from contextlib import nullcontext
 import argparse
-import plotly.express as px
 from safetensors.torch import load_file
 from tqdm import tqdm
 import torch
 from accelerate import Accelerator
 import torch.nn as nn
-from torch.utils.hooks import RemovableHandle
-from pi3.utils.basic import load_images_as_tensor, write_ply
-from pi3.utils.geometry import depth_edge
 from pi3.models.pi3 import Pi3
 from pi3.models.layers.block import BlockRope
-from SVD_LLM.component.svd_pi3 import SVD_Pi3Attention, SVD_Pi3MLP
-from SVD_LLM.utils.data_utils import *
-from SVD_LLM.utils.model_utils import *
-import random
-from typing import List, Dict, Optional
-from PIL import Image
-from torchvision import transforms
+from typing import List, Dict
 
-def collect_sintel_frames(root: str, split: str, folder: str) -> List[str]:
-    """Return list of frame paths under e.g. training/clean/alley_1/*.png."""
-    fdir = os.path.join(root, split, folder)
-    frames = []
-
-    # log the number of scenes
-    scenes = sorted([d for d in os.listdir(fdir) if os.path.isdir(os.path.join(fdir, d))])
-    num_scenes = len(scenes)
-    print("🍑" * 20)
-    print(f"Found {num_scenes} scenes for calibration!")
-
-    if not os.path.isdir(fdir):
-        return frames
-    for scene in sorted(os.listdir(fdir)):
-        scene_dir = os.path.join(fdir, scene)
-        if not os.path.isdir(scene_dir):
-            continue
-        for fn in sorted(os.listdir(scene_dir)):
-            if fn.lower().endswith(".png"):
-                frames.append(os.path.join(scene_dir, fn))
-    return frames
-
-def build_transform(image_size: int = 224, center_crop: bool = True):
-    tr = [transforms.Resize(image_size, interpolation=transforms.InterpolationMode.BICUBIC)]
-    if center_crop:
-        tr.append(transforms.CenterCrop(image_size))
-    tr += [
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                             std=[0.229, 0.224, 0.225]),
-    ]
-    return transforms.Compose(tr)
-
-
-def Pi3_get_calib_train_data(
-    root: str,
-    nsamples: int = 256,
-    batch_size: int = 8,
-    image_size: int = 224,
-    split: str = "training",
-    seed: int = 3
-) -> List[Dict[str, torch.Tensor]]:
-    # collect all frames        
-    frames = collect_sintel_frames(root, split, "final")
-    print(f"🍑there are {len(frames)} total frames from Sintel {split} set.")
-
-    # sample `nsamples` frames randomly
-    random.seed(seed)
-    torch.manual_seed(seed)
-    chosen = random.sample(frames, nsamples) if len(frames) >= nsamples else random.choices(frames, k=nsamples)
-
-
-    # FIXME: ablation - use all frames
-    chosen = frames
-
-
-
-    # image preprocessing + batching
-    to_tensor = build_transform(image_size=image_size, center_crop=True)
-    traindataset: List[Dict[str, torch.Tensor]] = []
-    batch_imgs: Optional[List[torch.Tensor]] = None
-    for idx, path in enumerate(chosen):
-        x = to_tensor(Image.open(path).convert("RGB"))
-        if batch_imgs is None:
-            batch_imgs = []
-        batch_imgs.append(x)
-
-        full = (len(batch_imgs) == batch_size)
-        last = (idx == len(chosen) - 1)
-        if full or last:
-            pixel_values = torch.stack(batch_imgs, dim=0)
-            traindataset.append({"pixel_values": pixel_values})
-            batch_imgs = None
-
-    # save the dataset
-    torch.save(traindataset, f"/data/wanghaoxuan/SVD_Pi3_cache/sintel_pi3_calib_nsamples{nsamples}_size{image_size}_seed{seed}.pt")
-    return traindataset
+from Pi3_main.data_utils import Pi3_get_calib_train_data
+from Pi3_main.svd_utils import safe_svd, sanitize, trunc_rank, TwoFactorLinear
 
 def sync():
     if torch.cuda.is_available():
@@ -241,45 +155,6 @@ def Pi3_profile_svdllm_low_resource(
 
     return profiling_mat
 
-class TwoFactorLinear(nn.Module):
-    def __init__(self, in_features: int, out_features: int,
-                 W_u: torch.Tensor, W_v: torch.Tensor, bias: Optional[torch.Tensor]):
-        super().__init__()
-        r = W_v.shape[0]
-        assert W_v.shape == (r, in_features)
-        assert W_u.shape == (out_features, r)
-        self.v = nn.Linear(in_features, r, bias=False)
-        self.u = nn.Linear(r, out_features, bias=(bias is not None))
-        with torch.no_grad():
-            self.v.weight.copy_(W_v)
-            self.u.weight.copy_(W_u)
-            if bias is not None:
-                self.u.bias.copy_(bias)
-
-    def forward(self, x):
-        return self.u(self.v(x))
-
-
-def safe_svd(M: torch.Tensor):
-    """
-        Apply SVD on M with fallbacks.
-    """
-    try:
-        U, S, VT = torch.linalg.svd(M.detach(), full_matrices=False)
-        return U.to(M.device, dtype=M.dtype), S.to(M.device, dtype=M.dtype), VT.to(M.device, dtype=M.dtype)
-    except Exception:
-        raise RuntimeError("SVD failed. Bad times!")
-
-def sanitize(t: torch.Tensor, replace: float = 0.0) -> torch.Tensor:
-    t = t.clone()
-    mask = ~torch.isfinite(t)
-    if mask.any():
-        t[mask] = replace
-    return t
-
-def trunc_rank(m: int, n: int, r: float) -> int:
-    rr = int((m * n * r) / (m + n))
-    return max(1, min(rr, min(m, n)))
 
 @torch.no_grad()
 def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
@@ -538,9 +413,6 @@ def main():
         )
         print(f"✅ collected {len(cali_white_data)} calibration batches with a total {sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
 
-        # print("DEBUGGING: skipping compression!...")
-        # print("✅✅✅ALL DEBUGGED!✅✅✅")
-        # return
 
         # derive the whitening matrix via profiling
         profiling_mat = Pi3_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
@@ -552,11 +424,13 @@ def main():
         accelerator = Accelerator()
         state_dict = accelerator.get_state_dict(model)
         from safetensors.torch import save_file
-        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}.safetensors"
-        
-        # FIXME: ablation - change output path
-        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}_ALL.safetensors"
-
+        if args.calibration_dataset_path.endswith('sintel'):
+            dataset_name = 'sintel'
+        elif 'scannet' in args.calibration_dataset_path.lower():
+            dataset_name = 'scannet'
+        else:
+            raise NotImplementedError("This dataset is not supported yet.")
+        out_path = f"{args.save_path}/Pi3_whitening_only_{dataset_name}_{str(args.ratio)}.safetensors"
         save_file(state_dict, out_path)
     else:
         Pi3_svd_baseline(model, args.ratio, args.DEV)
