@@ -15,7 +15,6 @@ from safetensors.torch import load_file
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
-from pi3.models.pi3 import CompressedPi3
 from utils.interfaces import infer_monodepth
 from utils.files import list_imgs_a_sequence, get_all_sequences
 from utils.messages import set_default_arg

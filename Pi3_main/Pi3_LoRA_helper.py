@@ -13,39 +13,88 @@ from safetensors.torch import load_file
 from omegaconf import OmegaConf
 from omegaconf import DictConfig
 
+from pi3.models.pi3 import Pi3
+
 parent_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(parent_path)
-from utils.peft import (
-    LoraConfig,
-    get_peft_model,
-    get_peft_model_state_dict,
-    prepare_model_for_int8_training,
-    set_peft_model_state_dict,
-)
-from utils.Prompter import Prompter, ZeroPrompter
-from pi3.models.pi3 import CompressedPi3
+from utils.peft import LoraConfig, get_peft_model
 from SVD_LLM.utils.data_utils import *
 from SVD_LLM.utils.model_utils import *
 from SVD_LLM.evaluater import *
 
+class TwoFactorLinear(nn.Module):
+    def __init__(self, in_features, out_features, r, has_bias):
+        super().__init__()
+        self.v = nn.Linear(in_features, r, bias=False)
+        self.u = nn.Linear(r, out_features, bias=has_bias)
+    def forward(self, x):
+        return self.u(self.v(x))
+
+# Which leaves we factorized
+_FACTOR_LEAVES = ("attn.qkv", "attn.proj", "mlp.fc1", "mlp.fc2")
+
+def install_twofactor_modules_from_sd(model: Pi3, sd):
+    """
+    For each target Linear in Pi3, if sd has <leaf>.u.weight and <leaf>.v.weight,
+    replace that module with a TwoFactorLinear of the correct rank/bias so that
+    state_dict keys match and load cleanly.
+    """
+    for i, blk in enumerate(model.decoder):
+        for leaf in _FACTOR_LEAVES:
+            base = f"decoder.{i}.{leaf}"
+            k_u_w = f"{base}.u.weight"
+            k_v_w = f"{base}.v.weight"
+            k_u_b = f"{base}.u.bias"
+            if (k_u_w in sd) and (k_v_w in sd):
+                # Walk to parent module that owns the leaf
+                parent = blk
+                parts = leaf.split(".")
+                for p in parts[:-1]:
+                    parent = getattr(parent, p)
+                leaf_name = parts[-1]
+                old = getattr(parent, leaf_name)  # original nn.Linear
+
+                in_f, out_f = old.in_features, old.out_features
+                r = sd[k_v_w].shape[0]
+                has_bias = (k_u_b in sd)
+
+                # Build TwoFactorLinear with correct geometry
+                tfl = TwoFactorLinear(in_features=in_f, out_features=out_f, r=r, has_bias=has_bias)
+                tfl = tfl.to(device=old.weight.device, dtype=old.weight.dtype)
+
+                setattr(parent, leaf_name, tfl)
+    return model
+
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
 # separate configs for SEQUENTIAL updates
-U_TARGETS = ["qkv_u", "o_u", "fc1_u", "fc2_u"]
-V_TARGETS = ["qkv_v", "o_v", "fc1_v", "fc2_v"]
+# U-phase = LoRA on U linears
+U_TARGETS = [
+    "attn.qkv.u",
+    "attn.proj.u",
+    "mlp.fc1.u",
+    "mlp.fc2.u",
+]
+
+# V-phase = LoRA on V linears
+V_TARGETS = [
+    "attn.qkv.v",
+    "attn.proj.v",
+    "mlp.fc1.v",
+    "mlp.fc2.v",
+]
 
 
 def build_pi3_with_lora(ckpt_path: str, device: torch.device, *,
                         phase: str, r: int = 8, alpha: int = 16, dropout: float = 0.05):
     """
     load a whitened Pi3, and wrap with LoRA
-    phase: "U", "V", or "NONE"
+    phase: "U" or "V"
     returns model (nn.Module), and info dict
     """
     sd = load_file(ckpt_path, device=str(device))
     
-    print(f"😎Loading the compressed Pi3 from {ckpt}...")
-    # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
+    print(f"😎Loading the compressed Pi3 from {ckpt_path}...")
     model = Pi3().to(device).eval()
     install_twofactor_modules_from_sd(model, sd)
     missing, unexpected = model.load_state_dict(sd, strict=False)
@@ -56,18 +105,16 @@ def build_pi3_with_lora(ckpt_path: str, device: torch.device, *,
 
     model.to(device)
 
-    if phase == "NONE":
-        return model, {"phase": "NONE"}
-
     targets = U_TARGETS if phase.upper()=="U" else V_TARGETS
     lc = LoraConfig(
         r=r, lora_alpha=alpha, lora_dropout=dropout,
         target_modules=targets,
         bias="none",
-        task_type=None,   # keep unmapped → generic PEFT path
+        task_type=None,
         fan_in_fan_out=False,
     )
-    model = get_peft_model(model, lc)   # wraps with PeftModel→LoraModel
+
+    model = get_peft_model(model, lc) # wrap with LoRA
     return model, {"phase": phase.upper(), "targets": targets, "r": r, "alpha": alpha, "dropout": dropout}
 
 
@@ -99,10 +146,10 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
 
         # Model & LoRA
         "model": {
-            "ckpt": ckpt_path,  # used by Pi3TrainerLoRA.prepare_model -> build_pi3_with_lora
+            "ckpt": ckpt_path,
         },
         "lora": {
-            "phase": phase,                 # "U" then "V", two steps of sequential
+            "phase": phase, # "U" then "V", two steps of sequential
             "r": args.lora_r,
             "alpha": args.lora_alpha,
             "dropout": args.lora_dropout,
@@ -112,9 +159,7 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
         "train": {
             "num_epoch": args.num_epochs,
             "batch_size": args.batch_size,
-            # if you want true gradient accumulation set this explicitly; otherwise 1 is fine
             "gradient_accumulation_steps": max(1, args.micro_batch_size),
-
             "optimizer": {
                 "type": "AdamW",
                 "lr": args.learning_rate,
@@ -127,15 +172,13 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
             },
 
             "print_freq": 50,
-            "model_dtype": "fp32",              # "fp16" or "fp32"; set to "fp32" to avoid instabilities
+            "model_dtype": "fp32",
             "clip_grad": 1.0,
             "clip_loss": 1e4,
             "base_seed": 42,
             "find_unused_parameters": False,
             "resume": None,
-
-            # fields consumed by create_dataloader / samplers
-            "iters_per_epoch": 0,             # 0 => use len(dataloader)
+            "iters_per_epoch": 0,
             "image_num_range": [8, 8],        # frames per sample
             "num_resolution": 1,
             "random_reslution": False,        # (typo preserved from upstream)
@@ -159,12 +202,8 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
             "ckpt_interval": 1,
             "max_checkpoints": 3,
         },
-
-        # Dataloader flags
         "train_dataloader": {"drop_last": True, "shuffle": True},
         "test_dataloader":  {"drop_last": False, "shuffle": False},
-
-        # === DATASETS ===
         "train_dataset": {
             "weights": {"CO3DV2": 10000},
             "CO3DV2": {
@@ -199,7 +238,6 @@ def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
         },
 
 
-        # Loss function
         "loss": {
             "train_loss": {
                 "_target_": "pi3.models.loss.Pi3Loss",
