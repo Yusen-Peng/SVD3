@@ -1,8 +1,8 @@
-# SVD-π3: Efficient Visual Geometry Learning via Singular Value Decomposition
+# SVD-π3: Efficient Visual Geometry Learning via Truncation-aware Singular Value Decomposition
 
 ![alt text](docs/SVD_Pi3.png)
 
-## Direct SVD baseline
+## Plain SVD baseline
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
@@ -32,19 +32,11 @@ CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi
 ✅ 1 out of 144 layers fell back to plain SVD without whitening.✅
 ```
 
-
 ### Calibration dataset
 
 from SVD-LLM paper: *"the changes of the three key characteristics on calibration data incur no more than 3% to the final performance, indicating that the sensitivity of SVD-LLM on calibration data is limited."*
 
 from Pi3 paper: *"we train the model on a large-scale aggregation of 15 diverse datasets... include GTA-SfM, CO3D, WildRGB-D, Habita, ARK-itScenes, TartanAir, ScanNet, ScanNet++, BlendedMVG, MatrixCity, MegaDepth, Hypersim, Taskonomy, Mid-Air, and an internal dynamic scene dataset..."* and **we already have ScanNet-v2 and CO3D-v2 (single-seq) on the server**!
-
-## LoRA finetuning
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.6.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05
-```
 
 ## Evaluation
 
@@ -64,7 +56,7 @@ python Pi3_evaluation/videodepth/infer.py
 python Pi3_evaluation/videodepth/eval.py
 ```
 
-- [ ] camera-angular
+- [ ] camera-angular (TBD, acquiring datasets is tricky...)
 
 - [x] camera-distance
 
@@ -78,4 +70,14 @@ python Pi3_evaluation/relpose/eval_dist.py
 ```bash
 # stay in 'SVD-pi3' (root directory)
 python Pi3_evaluation/mv_recon/eval.py
+# optional visualization
+python point_cloud_visualization_7scenes.py # for 7scenes
+python point_cloud_visualization_nrgbd.py # for NRGBD
+```
+
+## LoRA finetuning (WIP)
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.6.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05
 ```

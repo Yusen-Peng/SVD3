@@ -34,8 +34,7 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 U_TARGETS = ["qkv_u", "o_u", "fc1_u", "fc2_u"]
 V_TARGETS = ["qkv_v", "o_v", "fc1_v", "fc2_v"]
 
-# ======================== wrap the model with PEFT =========================
-# ============================================================================
+
 def build_pi3_with_lora(ckpt_path: str, device: torch.device, *,
                         phase: str, r: int = 8, alpha: int = 16, dropout: float = 0.05):
     """
@@ -43,9 +42,19 @@ def build_pi3_with_lora(ckpt_path: str, device: torch.device, *,
     phase: "U", "V", or "NONE"
     returns model (nn.Module), and info dict
     """
-    model = CompressedPi3().to(device).eval()
-    sd = load_file(ckpt_path, device="cpu")
-    model.load_factorized_state_dict(sd, strict=True)
+    sd = load_file(ckpt_path, device=str(device))
+    
+    print(f"😎Loading the compressed Pi3 from {ckpt}...")
+    # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
+    model = Pi3().to(device).eval()
+    install_twofactor_modules_from_sd(model, sd)
+    missing, unexpected = model.load_state_dict(sd, strict=False)
+    if unexpected:
+        print("Note: unexpected keys (benign):", unexpected)
+    if missing:
+        print("Note: missing keys (benign if non-decoder):", missing)
+
+    model.to(device)
 
     if phase == "NONE":
         return model, {"phase": "NONE"}
@@ -62,8 +71,6 @@ def build_pi3_with_lora(ckpt_path: str, device: torch.device, *,
     return model, {"phase": phase.upper(), "targets": targets, "r": r, "alpha": alpha, "dropout": dropout}
 
 
-# ======================== main finetuning configs =========================
-# ==========================================================================
 def build_cfg(args, phase: str, ckpt_path: str, out_dir: str) -> DictConfig:
     """
     Build a minimal DictConfig the Pi3TrainerLoRA stack expects, without Hydra CLI.

@@ -10,13 +10,16 @@ pi3:
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.8.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.5.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
-  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors
+
+  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors
+
 
 
 eval_datasets:
-  # - 7scenes-sparse
-  # - 7scenes-dense
-  # - NRGBD-sparse
+  - 7scenes-sparse
+  - 7scenes-dense
+  - NRGBD-sparse
   - NRGBD-dense
   # - DTU
   # - ETH3D
