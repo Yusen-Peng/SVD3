@@ -125,7 +125,7 @@ def Pi3_profile_svdllm_low_resource(
 
         # 1) CPU float64 & symmetrize
         cov = (grams[key] / n).to(torch.float64).cpu()
-        cov = 0.5 * (cov + cov.T)
+        cov = 0.5 * (cov + cov.T) # (n, n) where n = in_features
 
         d = cov.shape[0]
         I = torch.eye(d, dtype=cov.dtype, device=cov.device)
@@ -133,7 +133,7 @@ def Pi3_profile_svdllm_low_resource(
         # scale-aware base shrinkage (Ledoit-Wolf style tiny alpha)
         mu = float(cov.trace() / max(1, d))
         base_eps = 1e-6 * max(1.0, mu)   # adapt to magnitude
-        cov_j = cov + base_eps * I
+        cov_j = cov + base_eps * I # still (n, n) but after jitter
 
         # 2) try Cholesky on CPU
         try:
@@ -144,7 +144,7 @@ def Pi3_profile_svdllm_low_resource(
             lam = torch.clamp(evals, min=base_eps)
             L = Q @ torch.diag(torch.sqrt(lam))
 
-        profiling_mat[key] = L  # keep on CPU to save VRAM
+        profiling_mat[key] = L
 
     print(f"✅{num_modules - fail_case}/{num_modules} succeeded with Cholesky, {fail_case}/{num_modules} used EVD fallback")
 
@@ -180,6 +180,7 @@ def Pi3_svd_baseline(model: Pi3, ratio: float, device=None):
     print(f"Start plain SVD (no whitening) for {len(layers)} Linear targets...")
 
     for key, linear in tqdm(layers.items()):
+        linear: nn.Linear = linear
         parts = key.split(".") # ["decoder", "{i}", "attn"/"mlp", leaf]
         i = int(parts[1])
         leaf = parts[3]
@@ -250,25 +251,18 @@ def Pi3_whitening(
         linear: nn.Linear = linear
         parts = key.split(".")
         leaf = parts[3]
-
-        # --- 1) Weight ---
         W = linear.weight.data.to(dev).float()    # (out, in)
         W = sanitize(W)
-        m, n = W.shape
+        m, n = W.shape # m=out_features, n=in_features
 
-        # --- 2) Whitening L for this layer ---
         L = profiling_mat[key].to(dev).float()    # (in, in)
 
-
-        # --- 3) Build covariance Σ = L L^T and its ±1/2 powers ---
         Sigma = L @ L.T                           # (in, in)
         Sigma = 0.5 * (Sigma + Sigma.T)           # force symmetry
-
-        # eig Σ (SAFE — Σ is symmetric)
         try:
             evals, Q = torch.linalg.eigh(Sigma)
         except Exception:
-            # Whitening failed — fallback to plain SVD
+            # NOTE: if whitening failsm fall back to plain SVD baseline
             fail_case += 1
             print(f"[WARN] eigh(Σ) failed for {key}, using plain SVD.", flush=True)
             U, Svals, VT = safe_svd(W)
@@ -299,35 +293,28 @@ def Pi3_whitening(
                 )
             )
             continue
-
-        # clamp eigenvalues to avoid singular whitening
         evals = sanitize(evals)
         mu = evals.abs().max().item()
         floor = eps * max(1.0, mu)
         lam = torch.clamp(evals, min=floor)
-
-        sqrt_lam     = torch.sqrt(lam)
+        sqrt_lam = torch.sqrt(lam)
         inv_sqrt_lam = 1.0 / sqrt_lam
+        Sigma_half = Q @ torch.diag(sqrt_lam) @ Q.T
+        Sigma_minushalf = Q @ torch.diag(inv_sqrt_lam) @ Q.T
 
-        Sigma_half      = Q @ torch.diag(sqrt_lam)     @ Q.T   # Σ^{1/2}
-        Sigma_minushalf = Q @ torch.diag(inv_sqrt_lam) @ Q.T   # Σ^{-1/2}
-
-        # --- 4) Whitening-aware SVD: SVD(W @ Σ^{1/2}) ---
+        # attention! 
+        # here, we start to actually apply whitening
         M = W @ Sigma_half
         U, Svals, VT = safe_svd(M)
-
         r = trunc_rank(m, n, ratio)
         r = min(r, Svals.shape[0])
         print(f"🔥 [Whitening] Layer {key}: rank {Svals.shape[0]} → {r}")
-
         U_r  = U[:, :r]
         S_r  = sanitize(Svals[:r])
         VT_r = VT[:r, :]
 
-        # --- 5) Unwhiten (exact SVD-LLM math) ---
-        # W_r ≈ U_r S_r VT_r Σ^{-1/2}
-        W_u = (U_r * S_r.unsqueeze(0)).detach()        # (out, r)
-        W_v = (VT_r @ Sigma_minushalf).detach()        # (r, in)
+        W_u = (U_r * S_r.unsqueeze(0)).detach() # (m, r)
+        W_v = (VT_r @ Sigma_minushalf).detach() # (r, n)
 
         # --- 6) Install compressed layer ---
         target_device = linear.weight.device

@@ -20,11 +20,18 @@ def sanitize(t: torch.Tensor, replace: float = 0.0) -> torch.Tensor:
     return t
 
 def trunc_rank(m: int, n: int, r: float) -> int:
+    # r = (ratio * m * n) / (m + n)
     rr = int((m * n * r) / (m + n))
     return max(1, min(rr, min(m, n)))
 
 
 class TwoFactorLinear(nn.Module):
+    """
+    A Linear layer represented as two factors: W = U @ V
+    where W has shape (out_features, in_features),
+    U has shape (out_features, r),
+    V has shape (r, in_features).
+    """
     def __init__(self, in_features: int, out_features: int,
                  W_u: torch.Tensor, W_v: torch.Tensor, bias: Optional[torch.Tensor]):
         super().__init__()
@@ -40,4 +47,12 @@ class TwoFactorLinear(nn.Module):
                 self.u.bias.copy_(bias)
 
     def forward(self, x):
+        """
+        Forward pass through the two-factor linear layer.
+        
+        Args:
+            x (torch.Tensor): Input tensor of shape (batch_size, in_features).
+        Returns:
+            torch.Tensor: Output tensor of shape (batch_size, out_features).
+        """
         return self.u(self.v(x))
