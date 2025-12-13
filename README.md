@@ -29,7 +29,7 @@ CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi
 ✅56/144 succeeded with Cholesky, 88/144 used EVD fallback
 ```
 
-### Whitening is always applied successfully
+### Whitening is not always applied successfully
 
 ```bash
 # apply whitening
@@ -87,3 +87,12 @@ accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --
 # run a long job offline
 nohup accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05 > lora_train_3epochs.log 2>&1 &
 ```
+
+## Other related work
+
+SVD-LLM V2:
+- dynamic compression ratio:
+    - ![alt text](docs/dynamic_ratio.png)
+- two-step SVD instead of Cholesky decomposition
+    - ![alt text](docs/different_svd.png)
+
