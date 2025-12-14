@@ -88,7 +88,7 @@ accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --
 nohup accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05 > lora_train_3epochs.log 2>&1 &
 ```
 
-## Other related work
+## Related Work
 
 SVD-LLM V2:
 - dynamic compression ratio:
@@ -101,3 +101,9 @@ AdaSVD:
     - ![alt text](docs/important_score.png)
 - alternating updates (no supervised lora at all):
     - ![alt text](docs/alternating_updates.png)
+
+DipSVD:
+- dynamic compression ratio:
+    - ![alt text](docs/fisher_erank.png)
+- channel-weighted whitening:
+    - ![alt text](docs/channel_aware.png)
