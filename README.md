@@ -96,3 +96,8 @@ SVD-LLM V2:
 - two-step SVD instead of Cholesky decomposition
     - ![alt text](docs/different_svd.png)
 
+AdaSVD:
+- dynamic compression ratio:
+    - ![alt text](docs/important_score.png)
+- alternating updates (no supervised lora at all):
+    - ![alt text](docs/alternating_updates.png)
