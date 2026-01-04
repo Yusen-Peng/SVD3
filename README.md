@@ -1,6 +1,18 @@
-# SVD-π3: Efficient Visual Geometry Learning via Truncation-aware Singular Value Decomposition
+# Data-adaptive SVD for Efficient Visual Geometry Learning
 
 ![alt text](docs/SVD_Pi3.png)
+
+## Data Adaptive part (brainstorming)
+
+1. start with a *base* whitened + SVD-ed model with **40%** retention ratio
+2. during inference, **slice** to 30%, 20%, 10% retention ratio based on input's entropy in the test set
+  - slice: 
+    - z = x @ V[:r].T
+    - y = z @ U[:, :r].T + b
+3. compute entropy score s(x) for all samples from the calibration dataset to learn entropy thresholds
+  - learn a mapping between entropy score s(x) and retention ratio (30%? 20%? 10%?)
+4. outcomes: on average, we still maintain **20%** retention ratio in order to compare with baseline methods (i.e., direct SVD and homogeneous whitening) on all benchmarks
+
 
 ## Plain SVD baseline
 
@@ -14,7 +26,7 @@ CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi
 ```bash
 # stay in 'SVD-pi3' (root directory)
 CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/sintel --whitening_nsamples 256
-# or use scannetv2 as calibration dataset
+# or use scannetv2 as calibration dataset (RECOMMENDED)
 CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/scannetv2 --whitening_nsamples 256
 ```
 
@@ -36,74 +48,13 @@ CUDA_VISIBLE_DEVICES=0 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi
 ✅ 1 out of 144 layers fell back to plain SVD without whitening.✅
 ```
 
-### Calibration dataset
 
-from SVD-LLM paper: *"the changes of the three key characteristics on calibration data incur no more than 3% to the final performance, indicating that the sensitivity of SVD-LLM on calibration data is limited."*
 
-from Pi3 paper: *"we train the model on a large-scale aggregation of 15 diverse datasets... include GTA-SfM, CO3D, WildRGB-D, Habita, ARK-itScenes, TartanAir, ScanNet, ScanNet++, BlendedMVG, MatrixCity, MegaDepth, Hypersim, Taskonomy, Mid-Air, and an internal dynamic scene dataset..."* and **we already have ScanNet-v2 and CO3D-v2 (single-seq) on the server**!
-
-## Evaluation
-
-- [x] Monocular Depth Estimation
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-python Pi3_evaluation/monodepth/infer.py
-python Pi3_evaluation/monodepth/eval.py
-```
-
-- [x] Video Depth Estimation
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-python Pi3_evaluation/videodepth/infer.py
-python Pi3_evaluation/videodepth/eval.py
-```
-
-- [ ] camera-angular (TBD, acquiring datasets is tricky...)
-
-- [x] camera-distance
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-python Pi3_evaluation/relpose/eval_dist.py
-```
-
-- [x] point-map
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-python Pi3_evaluation/mv_recon/eval.py
-# optional visualization
-python point_cloud_visualization_7scenes.py # for 7scenes
-python point_cloud_visualization_nrgbd.py # for NRGBD
-```
-
-## LoRA finetuning (WIP)
+<!-- ## LoRA finetuning (WIP)
 
 ```bash
 # a simple quick run
 accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05
 # run a long job offline
 nohup accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05 > lora_train_3epochs.log 2>&1 &
-```
-
-## Related Work
-
-SVD-LLM V2:
-- dynamic compression ratio:
-    - ![alt text](docs/dynamic_ratio.png)
-- two-step SVD instead of Cholesky decomposition
-    - ![alt text](docs/different_svd.png)
-
-AdaSVD:
-- dynamic compression ratio:
-    - ![alt text](docs/important_score.png)
-- alternating updates (no supervised lora at all):
-    - ![alt text](docs/alternating_updates.png)
-
-DipSVD:
-- dynamic compression ratio:
-    - ![alt text](docs/fisher_erank.png)
-- channel-weighted whitening:
-    - ![alt text](docs/channel_aware.png)
+``` -->

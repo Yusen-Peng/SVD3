@@ -1,0 +1,36 @@
+# Evaluation
+
+## Monocular Depth Estimation
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/monodepth/infer.py
+python Pi3_evaluation/monodepth/eval.py
+```
+
+## Video Depth Estimation
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/videodepth/infer.py
+python Pi3_evaluation/videodepth/eval.py
+```
+
+## camera-angular (TBD, acquiring datasets is tricky...)
+
+## camera-distance
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/relpose/eval_dist.py
+```
+
+## point-map
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+python Pi3_evaluation/mv_recon/eval.py
+# optional visualization
+python point_cloud_visualization_7scenes.py # for 7scenes
+python point_cloud_visualization_nrgbd.py # for NRGBD
+```
