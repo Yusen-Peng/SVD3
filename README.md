@@ -1,5 +1,5 @@
 <p align="center">
-<img src="docs/SVD_Pi3.png" width="650"/>
+<img src="docs/SVD_Pi3.png" width="850"/>
 </p>
 
 <h1 align="center">SVD-π3</h1>
