@@ -417,7 +417,7 @@ def main():
             dataset_name = 'scannet'
         else:
             raise NotImplementedError("This dataset is not supported yet.")
-        out_path = f"{args.save_path}/Pi3_whitening_only_{dataset_name}_{str(args.ratio)}.safetensors"
+        out_path = f"{args.save_path}/Pi3_whitening_only_{dataset_name}_{str(args.ratio)}_BASE.safetensors"
         save_file(state_dict, out_path)
     else:
         Pi3_svd_baseline(model, args.ratio, args.DEV)

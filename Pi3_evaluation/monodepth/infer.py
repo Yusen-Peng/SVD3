@@ -15,55 +15,10 @@ from safetensors.torch import load_file
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
-from utils.interfaces import infer_monodepth
+from utils.interfaces import infer_monodepth, adaptive_infer_monodepth
 from utils.files import list_imgs_a_sequence, get_all_sequences
 from utils.messages import set_default_arg
-
-
-class TwoFactorLinear(nn.Module):
-    def __init__(self, in_features, out_features, r, has_bias):
-        super().__init__()
-        self.v = nn.Linear(in_features, r, bias=False)
-        self.u = nn.Linear(r, out_features, bias=has_bias)
-    def forward(self, x):
-        # order matters: x -> V -> U  (reconstructs W = U S V^T)
-        return self.u(self.v(x))
-
-# Which leaves we factorized
-_FACTOR_LEAVES = ("attn.qkv", "attn.proj", "mlp.fc1", "mlp.fc2")
-
-def install_twofactor_modules_from_sd(model: Pi3, sd):
-    """
-    For each target Linear in Pi3, if sd has <leaf>.u.weight and <leaf>.v.weight,
-    replace that module with a TwoFactorLinear of the correct rank/bias so that
-    state_dict keys match and load cleanly.
-    """
-    for i, blk in enumerate(model.decoder):
-        for leaf in _FACTOR_LEAVES:
-            base = f"decoder.{i}.{leaf}"
-            k_u_w = f"{base}.u.weight"
-            k_v_w = f"{base}.v.weight"
-            k_u_b = f"{base}.u.bias"
-            if (k_u_w in sd) and (k_v_w in sd):
-                # Walk to parent module that owns the leaf
-                parent = blk
-                parts = leaf.split(".")
-                for p in parts[:-1]:
-                    parent = getattr(parent, p)
-                leaf_name = parts[-1]
-                old = getattr(parent, leaf_name)  # original nn.Linear
-
-                in_f, out_f = old.in_features, old.out_features
-                r = sd[k_v_w].shape[0]
-                has_bias = (k_u_b in sd)
-
-                # Build TwoFactorLinear with correct geometry
-                tfl = TwoFactorLinear(in_features=in_f, out_features=out_f, r=r, has_bias=has_bias)
-                tfl = tfl.to(device=old.weight.device, dtype=old.weight.dtype)
-
-                setattr(parent, leaf_name, tfl)
-    return model
-
+from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
 
 @hydra.main(version_base="1.2", config_path="../configs", config_name="eval")
 def main(hydra_cfg: DictConfig):
@@ -80,16 +35,20 @@ def main(hydra_cfg: DictConfig):
         print(f"😎Loading the compressed Pi3 from {ckpt}...")
         # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
         model = Pi3().to(device).eval()
-        install_twofactor_modules_from_sd(model, sd)
-        missing, unexpected = model.load_state_dict(sd, strict=False)
-        if unexpected:
-            print("Note: unexpected keys (benign):", unexpected)
-        if missing:
-            print("Note: missing keys (benign if non-decoder):", missing)
+
+        ADAPTIVE = True if 'base' in pretrained_model_name_or_path.lower() else False
+        if ADAPTIVE:
+            # support slicing
+            install_slicabletwofactor_modules_from_sd(model, sd)
+            sd_rest = strip_factor_keys(sd)
+            model.load_state_dict(sd_rest, strict=False)
+        else:
+            install_twofactor_modules_from_sd(model, sd)
+            model.load_state_dict(sd, strict=False)
     else:
         print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
         model = Pi3().to(device).eval()
-        model.load_state_dict(sd)
+        model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
     model.to(device)
 
 
@@ -138,7 +97,10 @@ def main(hydra_cfg: DictConfig):
                     continue
 
                 # 3.2.2 infer the depth map
-                depth_map = infer_monodepth(file, model, hydra_cfg)
+                if COMPRESSED and ADAPTIVE:
+                    depth_map = adaptive_infer_monodepth(file, model, hydra_cfg)
+                else:
+                    depth_map = infer_monodepth(file, model, hydra_cfg)
 
                 # 3.2.3 save the depth map to the save_dir as npy
                 if isinstance(depth_map, torch.Tensor):
