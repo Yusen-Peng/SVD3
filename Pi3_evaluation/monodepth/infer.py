@@ -15,7 +15,7 @@ from safetensors.torch import load_file
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
-from utils.interfaces import infer_monodepth, adaptive_infer_monodepth
+from utils.interfaces import infer_monodepth, adaptive_infer_monodepth, learn_entropy_cfg_from_calib
 from utils.files import list_imgs_a_sequence, get_all_sequences
 from utils.messages import set_default_arg
 from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
@@ -42,6 +42,20 @@ def main(hydra_cfg: DictConfig):
             install_slicabletwofactor_modules_from_sd(model, sd)
             sd_rest = strip_factor_keys(sd)
             model.load_state_dict(sd_rest, strict=False)
+
+            # re-load the calibration dataset
+            cali_path = "/data/wanghaoxuan/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+            cali_white_data = torch.load(cali_path, map_location="cpu")
+            print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
+            learn_entropy_cfg_from_calib(
+                calib=cali_white_data,
+                save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+                bins=256,
+                tail_frac=0.25,
+                rr_values=(0.1, 0.2, 0.3),
+                device=device
+            )
+
         else:
             install_twofactor_modules_from_sd(model, sd)
             model.load_state_dict(sd, strict=False)

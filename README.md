@@ -1,18 +1,19 @@
-# Data-adaptive SVD for Efficient Visual Geometry Learning
+<p align="center">
+<img src="docs/SVD_Pi3.png" width="550"/>
+</p>
 
-![alt text](docs/SVD_Pi3.png)
+<h1 align="center">SVD-π3</h1>
+<h2 align="center">Data-adaptive SVD for Efficient Visual Geometry Learning</h2>
 
-## Data Adaptive part (brainstorming)
+## Data Adaptive SVD
 
 - [x] start with a *base* whitened + SVD-ed model with **40%** retention ratio
-- [ ] during inference, **slice** to 30%, 20%, 10% retention ratio based on input's entropy in the test set
+- [x] during inference, **slice** to 30%, 20%, 10% retention ratio based on input's entropy in the test set
   - slice: 
     - z = x @ V[:r].T
     - y = z @ U[:, :r].T + b
-- [ ] compute entropy score s(x) for all samples from the calibration dataset to learn entropy thresholds
-  - learn a mapping between entropy score s(x) and retention ratio (30%? 20%? 10%?)
-- [ ] ideal outcomes: on average, we still maintain **20%** retention ratio in order to compare with baseline methods (i.e., direct SVD and homogeneous whitening) on all benchmarks
-
+- [x] compute shannon entropy score **s(x)** and slice the rank (according to learned entropy thresholds)
+- [x] using the calibration dataset, learn a mapping between entropy score s(x) and retention ratio (30% or 20% or 10%) while maintain **20%** retention ratio on average
 
 ## Plain SVD baseline
 
