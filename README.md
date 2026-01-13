@@ -15,6 +15,27 @@
 - [x] compute shannon entropy score **s(x)** and slice the rank (according to learned entropy thresholds)
 - [x] using the calibration dataset, learn a mapping between entropy score s(x) and retention ratio (30% or 20% or 10%) while maintain **20%** retention ratio on average
 
+
+learned ``adaptive_cfg.json``:
+
+```JSON
+{
+  "entropy_p5": 0.6597831845283508,
+  "entropy_p95": 5.533994674682617,
+  "rr_values": [
+    0.1,
+    0.2,
+    0.3
+  ],
+  "tail_frac": 0.25,
+  "rr_thresholds": [
+    0.27931690216064453,
+    0.732358992099762
+  ]
+}
+```
+
+
 ## Plain SVD baseline
 
 ```bash

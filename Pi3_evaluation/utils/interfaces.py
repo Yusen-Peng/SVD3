@@ -431,6 +431,37 @@ def infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
     return end - start, depth_map, depth_conf
 
 
+def adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    
+    # first image/frame only for entropy computation
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+
+    s = entropy_score_from_imgs(first, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    start = time.time()
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    end = time.time()
+
+    depth_map = pred['local_points'][0, ..., -1]  # (N, h_14, w_14)
+    depth_conf = pred['conf'][0, ..., 0]          # (N, h_14, w_14)
+    return end - start, depth_map, depth_conf
+
+
 def infer_cameras_w2c(filelist: str, model: Pi3, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)

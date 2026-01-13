@@ -7,12 +7,26 @@ import torch.nn as nn
 from typing import List, Optional, Tuple
 from omegaconf import DictConfig
 from PIL import Image
+from typing import Optional
+import json
+from typing import Dict, Any
+from functools import lru_cache
+import json
+import torch
+from typing import List, Dict, Any
+from tqdm import tqdm
 
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
-from Pi3_main.pi3.models.pi3 import Pi3
-from Pi3_main.pi3.utils.geometry import se3_inverse
+from pi3.models.pi3 import Pi3
+from pi3.utils.geometry import se3_inverse
 
+BASE_RR = 0.4
+
+@lru_cache(maxsize=1)
+def _load_entropy_cfg(path: str):
+    with open(path, "r") as f:
+        return json.load(f)
 
 class TwoFactorLinear(nn.Module):
     def __init__(self, in_features, out_features, r, has_bias):
@@ -84,13 +98,13 @@ class SlicableTwoFactorLinear(nn.Module):
         if self.bias is not None:
             nn.init.zeros_(self.bias)
     
-    def set_active_frac(self, frac: float | None):
+    def set_active_frac(self, frac: float):
         """
             Set the active ran fraction for this layer to support dynamic slicing.
         """
         self.active_frac = None if frac is None else float(frac)
 
-    def forward(self, x, r: int | None = None):
+    def forward(self, x, r: Optional[int] = None):
         if r is None:
             frac = getattr(self, "active_frac", None)
             if frac is not None:
@@ -148,7 +162,6 @@ def install_slicabletwofactor_modules_from_sd(model: nn.Module, sd: dict):
                 _set_module_by_dotted(model, f"decoder.{i}.{leaf}", tfl)
     return model
 
-
 def strip_factor_keys(sd: dict):
     sd2 = dict(sd)
     for k in list(sd2.keys()):
@@ -160,7 +173,6 @@ def set_model_rank_frac(model: nn.Module, frac: float):
     for m in model.modules():
         if isinstance(m, SlicableTwoFactorLinear):
             m.set_active_frac(frac)
-
 
 
 ######################################################################################################################
@@ -239,6 +251,8 @@ def load_and_resize14(filelist: List[str], new_width: int, device: str, verbose:
     imgs = F.interpolate(imgs, (patch_h * 14, patch_w * 14), mode="bilinear", align_corners=False, antialias=True).unsqueeze(0)
     return imgs
 
+
+
 def infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
@@ -252,7 +266,126 @@ def infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
     depth_map = points[0, ..., -1].detach()  # (h_14, w_14)
     return depth_map  # torch.Tensor
 
+#################################################################################################################
+#################################################################################################################
 
+@torch.no_grad()
+def entropy_score_from_imgs(imgs: torch.Tensor, bins: int = 256) -> float:
+    assert imgs.ndim == 5 and imgs.shape[0] == 1 and imgs.shape[1] == 1 and imgs.shape[2] == 3, \
+        f"Expected (1,1,3,H,W), got {tuple(imgs.shape)}"
+
+    x = imgs[0, 0]  # (3,H,W)
+    # grayscale
+    gray = 0.2989 * x[0] + 0.5870 * x[1] + 0.1140 * x[2]  # (H,W)
+    gray = gray.clamp(0, 1)
+
+    # quantize to [0, bins-1]
+    q = (gray * (bins - 1)).to(torch.int64)  # (H,W)
+
+    hist = torch.bincount(q.flatten(), minlength=bins).float()
+    p = hist / (hist.sum() + 1e-12)
+    H = -(p * (p + 1e-12).log2()).sum()
+    return float(H.item())
+
+@torch.no_grad()
+def normalize_entropy_score(s: float, cfg) -> float:
+    """
+    Percentile-based normalization using calibration statistics.
+
+    s_norm = clip((s - p5) / (p95 - p5), 0, 1)
+
+    Assumes entropy_p5 and entropy_p95 are computed on a calibration set.
+    """
+    p5  = float(cfg['entropy_p5'])
+    p95 = float(cfg['entropy_p95'])
+
+    denom = max(p95 - p5, 1e-6)
+    s_norm = (s - p5) / denom
+    return float(min(1.0, max(0.0, s_norm)))
+
+
+@torch.no_grad()
+def rr_from_entropy(s_norm: float, cfg: dict) -> float:
+    th = cfg["rr_thresholds"]
+    rr = [0.1, 0.2, 0.3] # 10%, 20%, 30% compression ratios
+
+    if s_norm < th[0]:
+        return rr[0]
+    elif s_norm < th[1]:
+        return rr[1]
+    else:
+        return rr[2]
+    
+@torch.no_grad()
+def learn_entropy_cfg_from_calib(
+    calib: List[Dict[str, torch.Tensor]],
+    save_path: str = '/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+    bins: int = 256,
+    tail_frac: float = 0.25, # 25% low, 50% mid, 25% high => avg rr = 0.2
+    rr_values: Tuple[float, float, float] = (0.1, 0.2, 0.3),
+    device: str = "cuda",
+) -> Dict[str, Any]:
+    """
+    Build entropy cfg from calibration dataset, reusing user's helpers.
+
+    Output JSON schema:
+    {
+      "entropy_p5": ...,
+      "entropy_p95": ...,
+      "rr_thresholds": [t0, t1],   # in normalized space [0,1]
+      "rr_values": [0.1, 0.2, 0.3],
+      "tail_frac": 0.25
+    }
+
+    Avg-retention control:
+    - if rr_values = (0.1, 0.2, 0.3), symmetric tails guarantee E[rr] = 0.2
+      under the calibration distribution.
+    """
+    assert 0.0 < tail_frac < 0.5, "tail_frac must be in (0, 0.5)"
+    rr0, rr1, rr2 = rr_values
+    assert abs(rr1 - 0.2) < 1e-9, "This avg-control trick assumes middle rr is 0.2."
+
+    entropies = []
+
+    for batch in calib:
+        pv = batch["pixel_values"].to(device)  # (B,3,H,W)
+        B = pv.shape[0]
+        for b in range(B):
+            imgs = pv[b].unsqueeze(0).unsqueeze(0)  # (1,1,3,H,W)
+            H = entropy_score_from_imgs(imgs, bins=bins)
+            entropies.append(H)
+
+    if len(entropies) == 0:
+        raise ValueError("Calibration dataset is empty; cannot learn entropy cfg.")
+
+    ent = torch.tensor(entropies, dtype=torch.float32)
+
+    entropy_p5 = float(torch.quantile(ent, 0.05).item())
+    entropy_p95 = float(torch.quantile(ent, 0.95).item())
+
+    # build cfg with just normalization stats first (so we can normalize)
+    cfg: Dict[str, Any] = {
+        "entropy_p5": entropy_p5,
+        "entropy_p95": entropy_p95,
+        "rr_values": [float(rr0), float(rr1), float(rr2)],
+        "tail_frac": float(tail_frac),
+    }
+
+    s_norm_list = [normalize_entropy_score(float(s), cfg) for s in entropies]
+    s_norm = torch.tensor(s_norm_list, dtype=torch.float32).clamp(0, 1)
+
+
+    t0 = float(torch.quantile(s_norm, tail_frac).item())
+    t1 = float(torch.quantile(s_norm, 1.0 - tail_frac).item())
+
+    cfg["rr_thresholds"] = [t0, t1]
+
+    if save_path is not None:
+        with open(save_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+    print(f"🍀🍀🍀Saved adaptive entropy cfg to {save_path} 🍀🍀🍀")
+
+    return cfg
 
 def adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
     """
@@ -263,14 +396,13 @@ def adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
                              device=hydra_cfg.device, verbose=hydra_cfg.verbose)
 
     # compute entropy score + map to retention
-    # TODO
-
-    # rr in {0.1, 0.2, 0.3} (these are "absolute retention ratios" wrt original full-rank)
-    rr = 0.2  # TODO: from entropy mapping
-    base_rr = 0.4
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    s = entropy_score_from_imgs(imgs, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
 
     # slice fraction relative to base checkpoint rank
-    frac = min(1.0, rr / base_rr)
+    frac = min(1.0, rr / BASE_RR)
     set_model_rank_frac(model, frac)
 
     dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
@@ -285,6 +417,33 @@ def adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
 def infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    start = time.time()
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    end = time.time()
+
+    depth_map = pred['local_points'][0, ..., -1]  # (N, h_14, w_14)
+    depth_conf = pred['conf'][0, ..., 0]          # (N, h_14, w_14)
+    return end - start, depth_map, depth_conf
+
+def adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    first = imgs[:1] # first frame only for entropy computation
+    s = entropy_score_from_imgs(first, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
 
     dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
 
