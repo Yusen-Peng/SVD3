@@ -698,7 +698,229 @@ def embedding_adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictCon
     return depth_map
 
 
+############################################################################################################
 
+
+"""
+    Below is the implementation of cossim-drift-guided data-adaptive inference.
+"""
+
+@torch.no_grad()
+def _cosine_drift_tokens(x: torch.Tensor, y: torch.Tensor, eps: float = 1e-8) -> torch.Tensor:
+    """
+    x, y: (..., T, D)
+    returns: scalar drift tensor
+    """
+    x_f = x.reshape(-1, x.shape[-1]).float()
+    y_f = y.reshape(-1, y.shape[-1]).float()
+    cos = F.cosine_similarity(x_f, y_f, dim=-1, eps=eps)
+    return (1.0 - cos).mean()
+
+@torch.no_grad()
+def probe_cosine_drift_early_decoder(
+    model: Pi3,
+    imgs: torch.Tensor,          # (B,N,3,H,W) already resized like load_and_resize14 gives you
+    probe_layers: int = 4,
+    ignore_special_tokens: bool = True,
+    max_tokens_per_frame: int | None = None,   # optional speed
+    device: str | torch.device = "cuda",
+    eps: float = 1e-8,
+) -> float:
+    """
+    Computes cosine drift between input/output of early decoder blocks without modifying Pi3.
+
+    Returns: float scalar (mean drift over first `probe_layers` blocks and all frames)
+    """
+    model = model.to(device).eval()
+    imgs = imgs.to(device)
+    imgs = (imgs - model.image_mean.to(device)) / model.image_std.to(device)
+    B, N, C, H, W = imgs.shape
+    assert C == 3, f"Expected RGB imgs, got C={C}"
+    imgs_bn = imgs.reshape(B * N, C, H, W)
+    hidden = model.encoder(imgs_bn, is_training=True)
+    if isinstance(hidden, dict):
+        hidden = hidden["x_norm_patchtokens"]  # (BN, L, D)
+    # hidden: (BN, hw, D)
+    BN, hw, D = hidden.shape
+    assert BN == B * N
+    hidden = hidden.reshape(B * N, hw, D)
+
+    # register tokens
+    reg = model.register_token.repeat(B, N, 1, 1).reshape(B * N, *model.register_token.shape[-2:])  # (BN, S, D)
+    hidden = torch.cat([reg, hidden], dim=1)  # (BN, S+hw, D)
+    T = hidden.shape[1]
+
+    # positions
+    if not (hasattr(model, "pos_type") and str(model.pos_type).startswith("rope")):
+        raise RuntimeError("This static probe currently supports rope pos_type only (matches your Pi3).")
+    pos = model.position_getter(B * N, H // model.patch_size, W // model.patch_size, hidden.device)  # (BN, hw, 2)
+
+    # handle special tokens position padding exactly like decode()
+    if model.patch_start_idx > 0:
+        pos = pos + 1
+        pos_special = torch.zeros(B * N, model.patch_start_idx, 2, device=hidden.device, dtype=pos.dtype)
+        pos = torch.cat([pos_special, pos], dim=1)  # (BN, T, 2)
+
+    # run first probe_layers blocks and compute drift
+    L0 = min(int(probe_layers), len(model.decoder))
+    drifts = []
+
+    for i in range(L0):
+        blk = model.decoder[i]
+
+        if i % 2 == 0:
+            # (BN, T, D)
+            pos_i = pos.reshape(B * N, T, -1)
+            hid_i = hidden.reshape(B * N, T, -1)
+        else:
+            # (B, N*T, D)
+            pos_i = pos.reshape(B, N * T, -1)
+            hid_i = hidden.reshape(B, N * T, -1)
+
+        x_in = hid_i
+        y_out = blk(hid_i, xpos=pos_i)
+
+        # choose tokens to score
+        if ignore_special_tokens and model.patch_start_idx > 0:
+            x_use = x_in[..., model.patch_start_idx:, :]
+            y_use = y_out[..., model.patch_start_idx:, :]
+        else:
+            x_use, y_use = x_in, y_out
+
+        # optional token subsampling for speed (per frame)
+        if max_tokens_per_frame is not None:
+            # x_use is either (BN, t, D) or (B, N*t, D)
+            t = x_use.shape[-2]
+            if t > int(max_tokens_per_frame):
+                idx = torch.randperm(t, device=x_use.device)[: int(max_tokens_per_frame)]
+                x_use = x_use.index_select(dim=-2, index=idx)
+                y_use = y_use.index_select(dim=-2, index=idx)
+
+        drifts.append(_cosine_drift_tokens(x_use, y_use, eps=eps))
+
+        if i % 2 == 0:
+            hidden = y_out.reshape(B * N, T, -1)
+        else:
+            hidden = y_out.reshape(B * N, T, -1)
+    score = torch.stack(drifts).mean()
+    return float(score.item())
+
+def normalize_probe_score(s, cfg):
+    return ((s - cfg["score_p5"]) /
+            (cfg["score_p95"] - cfg["score_p5"] + 1e-8)).clamp(0, 1)
+
+@torch.no_grad()
+def learn_drift_cfg_from_calib(
+    calib: List[Dict[str, torch.Tensor]],
+    model: Pi3,
+    save_path: str = "/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_drift.json",
+    tail_frac: float = 0.25,
+    rr_values: Tuple[float, float, float] = (0.1, 0.2, 0.3),
+    device: str = "cuda",
+    probe_layers: int = 4,
+    ignore_special_tokens: bool = True,
+    max_tokens_per_frame: int | None = 256,
+) -> Dict[str, Any]:
+    assert 0.0 < tail_frac < 0.5, "tail_frac must be in (0, 0.5)"
+    rr0, rr1, rr2 = rr_values
+    assert abs(rr1 - 0.2) < 1e-9, "This avg-control trick assumes middle rr is 0.2."
+
+    model = model.to(device).eval()
+
+    drift_scores: List[float] = []
+
+    for batch in calib:
+        pv = batch["pixel_values"].to(device)  # (B,3,H,W)
+        B = pv.shape[0]
+        for b in range(B):
+            imgs = pv[b].unsqueeze(0).unsqueeze(0)  # (1,1,3,H,W)
+            s = probe_cosine_drift_early_decoder(
+                model=model,
+                imgs=imgs,
+                probe_layers=probe_layers,
+                ignore_special_tokens=ignore_special_tokens,
+                max_tokens_per_frame=max_tokens_per_frame,
+                device=device,
+            )
+            drift_scores.append(float(s))
+
+    if len(drift_scores) == 0:
+        raise ValueError("Calibration dataset is empty; cannot learn drift cfg.")
+
+    s = torch.tensor(drift_scores, dtype=torch.float32)
+
+    score_p5 = float(torch.quantile(s, 0.05).item())
+    score_p95 = float(torch.quantile(s, 0.95).item())
+
+    cfg: Dict[str, Any] = {
+        "score_p5": score_p5,
+        "score_p95": score_p95,
+        "rr_values": [float(rr0), float(rr1), float(rr2)],
+        "tail_frac": float(tail_frac),
+        "drift_probe": {
+            "kind": "cosine_drift_early_decoder",
+            "probe_layers": int(probe_layers),
+            "ignore_special_tokens": bool(ignore_special_tokens),
+            "max_tokens_per_frame": int(max_tokens_per_frame) if max_tokens_per_frame is not None else None,
+        },
+    }
+
+    s_norm_list = [normalize_probe_score(float(v), cfg) for v in drift_scores]
+    s_norm = torch.tensor(s_norm_list, dtype=torch.float32).clamp(0, 1)
+
+    t0 = float(torch.quantile(s_norm, tail_frac).item())
+    t1 = float(torch.quantile(s_norm, 1.0 - tail_frac).item())
+    cfg["rr_thresholds"] = [t0, t1]
+
+    if save_path is not None:
+        with open(save_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+    print(f"✅ Saved adaptive DRIFT cfg to {save_path}")
+
+    return cfg
+
+def _load_drift_cfg(path: str):
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+
+def drifting_adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
+    """
+    Adaptive inference for monodepth using early layer cos-sim drifting.
+    """
+    imgs = load_and_resize14(
+        [file],
+        new_width=hydra_cfg.load_img_size,
+        device=hydra_cfg.device,
+        verbose=hydra_cfg.verbose
+    )
+
+    # compute drifting score + map to retention
+    drift_cfg = _load_drift_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_drifting.json')
+    s = probe_cosine_drift_early_decoder(
+        model=model,
+        imgs=imgs,
+        probe_layers=drift_cfg.get("drift_probe", {}).get("probe_layers", 4),
+        ignore_special_tokens=drift_cfg.get("drift_probe", {}).get("ignore_special_tokens", True),
+        max_tokens_per_frame=drift_cfg.get("drift_probe", {}).get("max_tokens_per_frame", 256),
+        device=str(hydra_cfg.device),
+    )
+    s_norm = normalize_probe_score(s, drift_cfg)
+    rr = rr_from_entropy(s_norm, drift_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+
+    points = pred['local_points'][0]
+    depth_map = points[0, ..., -1].detach()
+    return depth_map
 
 
 

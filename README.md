@@ -7,7 +7,7 @@
 
 [Full Results on Overleaf](https://www.overleaf.com/project/68d89c98e6991a1fc59ea65e)
 
-## Data Adaptive SVD (entropy-guided)
+## Data Adaptive SVD (entropy-guided; works fine 👍)
 
 - [x] start with a *base* whitened + SVD-ed model with **40%** retention ratio
 - [x] during inference, **slice** to 30%, 20%, 10% retention ratio based on input's entropy in the test set
@@ -37,7 +37,7 @@ learned ``adaptive_cfg.json``:
 }
 ```
 
-## Data Adaptive SVD (encoder-embedding)
+## Data Adaptive SVD (encoder-embedding; bad)
 
 idea: instead of checking the shannon entropy of input images, do it on the embedding after encoder layers
 - [x] apply k-means on embeddings (K=256) + compute entropy to allocate compression ratio (30%, 20%, 10%)  
@@ -51,6 +51,12 @@ potential explanation from ChatGPT:
 - *"Pixel entropy survives domain shift better because it’s low-level; embedding entropy is very domain-sensitive."*
 
 
+## Data Adaptive SVD (early-layer-cos-sim-drift)
+
+idea: compute cosine similarity drift in early (4) layers to allocate compression ratio (30%, 20%, 10%) 
+- [x] cosine similarity drift scorer
+- [x] hidden state extraction from early decoder layer
+- [x] integrate it into the evaluation pipeline
 
 
 

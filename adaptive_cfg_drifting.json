@@ -1,0 +1,19 @@
+{
+  "score_p5": 0.06869048625230789,
+  "score_p95": 0.07596379518508911,
+  "rr_values": [
+    0.1,
+    0.2,
+    0.3
+  ],
+  "tail_frac": 0.25,
+  "drift_probe": {
+    "kind": "cosine_drift_early_decoder",
+    "probe_layers": 4,
+    "ignore_special_tokens": true
+  },
+  "rr_thresholds": [
+    0.37957727909088135,
+    0.6646890640258789
+  ]
+}
