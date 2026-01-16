@@ -9,22 +9,61 @@ import json
 
 from omegaconf import DictConfig, ListConfig
 from tqdm import tqdm
+from safetensors.torch import load_file
 
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
-from utils.interfaces import infer_cameras_w2c
+from utils.interfaces import infer_cameras_w2c, learn_entropy_cfg_from_calib
 from utils.messages import set_default_arg, write_csv
 from relpose.metric import se3_to_relative_pose_error, calculate_auc_np
+from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
 
 @hydra.main(version_base="1.2", config_path="../configs", config_name="eval")
 def main(hydra_cfg: DictConfig):
-    all_eval_datasets: ListConfig = hydra_cfg.eval_datasets  # see configs/evaluation/relpose-angular.yaml
-    all_data_info: DictConfig     = hydra_cfg.data           # see configs/data
-    pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/relpose-angular.yaml
+    all_eval_datasets: ListConfig      = hydra_cfg.eval_datasets  # see configs/evaluation/monodepth.yaml
+    all_data_info: DictConfig          = hydra_cfg.data           # see configs/data/depth.yaml
+    pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/monodepth.yaml
 
     # 0. create model
-    model = Pi3.from_pretrained(pretrained_model_name_or_path).to(hydra_cfg.device).eval()
+    COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
+    device = hydra_cfg.device
+    ckpt = pretrained_model_name_or_path
+    sd = load_file(ckpt, device=str(device))
+    if COMPRESSED:
+        print(f"😎Loading the compressed Pi3 from {ckpt}...")
+        # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
+        model = Pi3().to(device).eval()
+
+        ADAPTIVE = True if 'base' in pretrained_model_name_or_path.lower() else False
+        if ADAPTIVE:
+            # support slicing
+            install_slicabletwofactor_modules_from_sd(model, sd)
+            sd_rest = strip_factor_keys(sd)
+            model.load_state_dict(sd_rest, strict=False)
+
+            # re-load the calibration dataset
+            cali_path = "/data/wanghaoxuan/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+            cali_white_data = torch.load(cali_path, map_location="cpu")
+            print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
+            learn_entropy_cfg_from_calib(
+                calib=cali_white_data,
+                save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+                bins=256,
+                tail_frac=0.25,
+                rr_values=(0.1, 0.2, 0.3),
+                device=device
+            )
+
+        else:
+            install_twofactor_modules_from_sd(model, sd)
+            model.load_state_dict(sd, strict=False)
+    else:
+        print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
+        model = Pi3().to(device).eval()
+        model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
+    model.to(device)
+
     logger = logging.getLogger("relpose-angle")
     logger.info(f"Loaded Pi3 from {pretrained_model_name_or_path}")
     

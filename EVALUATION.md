@@ -16,7 +16,12 @@ PYTHONNOUSERSITE=1 python Pi3_evaluation/videodepth/infer.py
 PYTHONNOUSERSITE=1 python Pi3_evaluation/videodepth/eval.py
 ```
 
-## camera-angular (TBD, acquiring datasets is tricky...)
+<!-- ## camera-angular
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+PYTHONNOUSERSITE=1 python Pi3_evaluation/relpose/eval_angle.py
+``` -->
 
 ## camera-distance
 

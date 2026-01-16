@@ -150,6 +150,8 @@ class Co3dDataset(Dataset):
         self.CO3D_ANNOTATION_DIR = CO3D_ANNOTATION_DIR
         self.min_num_images = min_num_images
 
+        print(f'🤡🤡🤡all categories: {categories}')
+
         for c in categories:
             annotation_file = osp.join(self.CO3D_ANNOTATION_DIR, f"{c}_{split_name}.jgz")
             with gzip.open(annotation_file, "r") as fin:
@@ -348,14 +350,14 @@ TRAINING_CATEGORIES = [
     "hydrant",
     "keyboard",
     "laptop",
-    "microwave",
+    # "microwave",
     "motorcycle",
     "mouse",
     "orange",
     "parkingmeter",
     "pizza",
     "plant",
-    "stopsign",
+    # "stopsign",
     "teddybear",
     "toaster",
     "toilet",
@@ -363,7 +365,7 @@ TRAINING_CATEGORIES = [
     "toyplane",
     "toytrain",
     "toytruck",
-    "tv",
+    # "tv",
     "umbrella",
     "vase",
     "wineglass",

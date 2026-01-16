@@ -14,7 +14,7 @@ pi3:
 
 
 eval_datasets:
-  - Re10K
+  # - Re10K
   - CO3Dv2
 
 no_crop: False

@@ -15,7 +15,7 @@ from safetensors.torch import load_file
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
-from utils.interfaces import infer_monodepth, adaptive_infer_monodepth, learn_entropy_cfg_from_calib
+from utils.interfaces import infer_monodepth, adaptive_infer_monodepth, embedding_adaptive_infer_monodepth, learn_entropy_cfg_from_calib, learn_entropy_cfg_from_calib_embedding
 from utils.files import list_imgs_a_sequence, get_all_sequences
 from utils.messages import set_default_arg
 from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
@@ -27,7 +27,10 @@ def main(hydra_cfg: DictConfig):
     pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/monodepth.yaml
 
     # 0. create model
+    EMBEDDING_OR_INPUT = 'embedding' # 'embedding' or 'input'
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
+    
+
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
     sd = load_file(ckpt, device=str(device))
@@ -46,15 +49,29 @@ def main(hydra_cfg: DictConfig):
             # re-load the calibration dataset
             cali_path = "/data/wanghaoxuan/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
             cali_white_data = torch.load(cali_path, map_location="cpu")
-            print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
-            learn_entropy_cfg_from_calib(
-                calib=cali_white_data,
-                save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
-                bins=256,
-                tail_frac=0.25,
-                rr_values=(0.1, 0.2, 0.3),
-                device=device
-            )
+            if EMBEDDING_OR_INPUT == 'input':
+                print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
+                learn_entropy_cfg_from_calib(
+                    calib=cali_white_data,
+                    save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+                    bins=256,
+                    tail_frac=0.25,
+                    rr_values=(0.1, 0.2, 0.3),
+                    device=device
+                )
+            elif EMBEDDING_OR_INPUT == 'embedding':
+                print("🩵🩵🩵Learning adaptive entropy cfg from calibration data (embedding)...🩵🩵🩵")
+                learn_entropy_cfg_from_calib_embedding(
+                    calib=cali_white_data,
+                    model=model,
+                    save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_embedding.json',
+                    tail_frac=0.25,
+                    rr_values=(0.1, 0.2, 0.3),
+                    K=64,
+                    tau=80.0,
+                    soft=False,
+                    device=device
+                )
 
         else:
             install_twofactor_modules_from_sd(model, sd)
@@ -112,7 +129,10 @@ def main(hydra_cfg: DictConfig):
 
                 # 3.2.2 infer the depth map
                 if COMPRESSED and ADAPTIVE:
-                    depth_map = adaptive_infer_monodepth(file, model, hydra_cfg)
+                    if EMBEDDING_OR_INPUT == 'input':
+                        depth_map = adaptive_infer_monodepth(file, model, hydra_cfg)
+                    elif EMBEDDING_OR_INPUT == 'embedding':
+                        depth_map = embedding_adaptive_infer_monodepth(file, model, hydra_cfg)
                 else:
                     depth_map = infer_monodepth(file, model, hydra_cfg)
 

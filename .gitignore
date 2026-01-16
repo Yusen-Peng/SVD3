@@ -170,3 +170,4 @@ second_half_legacy/*
 tmp/*
 
 outputs*/
+adaptive_cfg_embedding.json

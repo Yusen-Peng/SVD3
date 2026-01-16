@@ -267,7 +267,11 @@ def infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
     return depth_map  # torch.Tensor
 
 #################################################################################################################
-#################################################################################################################
+
+
+"""
+    Below is the implementation of entropy-guided data-adaptive inference.
+"""
 
 @torch.no_grad()
 def entropy_score_from_imgs(imgs: torch.Tensor, bins: int = 256) -> float:
@@ -413,6 +417,297 @@ def adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
     points = pred['local_points'][0]
     depth_map = points[0, ..., -1].detach()
     return depth_map
+
+############################################################################################################
+
+
+"""
+    Below is the implementation of embedding-entropy-guided data-adaptive inference.
+"""
+
+@torch.no_grad()
+def entropy_score_from_embeddings(
+    patch_tokens: torch.Tensor,
+    codebook: torch.Tensor,
+    tau: float = 10.0,
+    eps: float = 1e-8,
+    soft: bool = True,
+) -> float:
+    """
+    patch_tokens: (L, D) encoder patch embeddings for ONE image
+    codebook:     (K, D) prototype vectors
+    Returns: normalized entropy in [0,1] (approximately)
+    """
+    X = patch_tokens.float()
+    C = codebook.float()
+
+    # cosine k-means-ish
+    X = F.normalize(X, dim=-1)
+    C = F.normalize(C, dim=-1)
+
+    logits = tau * (X @ C.t())  # (L, K)
+
+    if soft:
+        A = logits.softmax(dim=-1)
+        H = -(A * (A + eps).log()).sum(dim=-1).mean()
+        Hn = H / math.log(A.shape[-1] + 1e-12)
+        return float(Hn.item())
+    else:
+        k = logits.argmax(dim=-1)         # (L,)
+        p = torch.bincount(k, minlength=C.shape[0]).float()
+        p = p / p.sum().clamp_min(eps)
+
+    H = -(p * (p + eps).log()).sum()
+    Hn = H / math.log(p.numel() + 1e-12)
+    return float(Hn.item())
+
+@torch.no_grad()
+def build_codebook_kmeans(
+    all_tokens: torch.Tensor,   # (M, D)
+    K: int,
+    iters: int = 10,
+    seed: int = 0,
+) -> torch.Tensor:
+    """
+    Simple cosine k-means on GPU.
+    Returns: (K, D) centroids
+    """
+    device = all_tokens.device
+    g = torch.Generator(device=device)
+    g.manual_seed(seed)
+
+    X = F.normalize(all_tokens.float(), dim=-1)
+
+    # init: random samples
+    idx = torch.randperm(X.shape[0], generator=g, device=device)[:K]
+    C = X[idx].clone()  # (K, D)
+
+    for _ in range(iters):
+        # assign
+        sim = X @ C.T              # (M, K)
+        labels = sim.argmax(dim=1)
+
+        # update
+        for k in range(K):
+            mask = labels == k
+            if mask.any():
+                C[k] = X[mask].mean(dim=0)
+        C = F.normalize(C, dim=-1)
+
+    return C
+
+
+@torch.no_grad()
+def learn_entropy_cfg_from_calib_embedding(
+    calib: List[Dict[str, torch.Tensor]],
+    model: Pi3,
+    save_path: str = "/mnt/extdisk1/wanghaoxuan/SVD-pi3/embedding_adaptive_cfg.json",
+    tail_frac: float = 0.25,
+    rr_values: Tuple[float, float, float] = (0.1, 0.2, 0.3),
+    device: str = "cuda",
+    K: int = 256,                # codebook size
+    tau: float = 10.0,           # soft assignment temperature
+    soft: bool = True,           # soft vs hard assignment
+    max_tokens_per_image: int = 256,  # subsample L tokens to speed up entropy
+    max_total_tokens: int = 200_000,  # cap total tokens for codebook building
+    seed: int = 0,
+) -> Dict[str, Any]:
+    """
+    Learns an entropy cfg but using encoder patch embeddings instead of pixels.
+
+    Output JSON schema (extends yours by adding codebook + params):
+    {
+      "entropy_p5": ...,
+      "entropy_p95": ...,
+      "rr_thresholds": [t0, t1],
+      "rr_values": [...],
+      "tail_frac": ...,
+
+      "embed_entropy": {
+        "kind": "codebook_softassign",
+        "K": 256,
+        "tau": 10.0,
+        "soft": true,
+        "max_tokens_per_image": 256,
+        "seed": 0
+      }
+    }
+    """
+    assert 0.0 < tail_frac < 0.5, "tail_frac must be in (0, 0.5)"
+    rr0, rr1, rr2 = rr_values
+    assert abs(rr1 - 0.2) < 1e-9, "This avg-control trick assumes middle rr is 0.2."
+
+    model = model.to(device).eval()
+
+    # collect patch tokens from calib to build a codebook
+    token_bank = []
+
+    for batch in calib:
+        pv = batch["pixel_values"].to(device)  # (B,3,H,W)
+        B = pv.shape[0]
+        for b in range(B):
+            img = pv[b].unsqueeze(0)  # (1,3,H,W)
+            img = (img - model.image_mean) / model.image_std
+
+            out = model.encoder(img, is_training=True)
+            if isinstance(out, dict):
+                out = out["x_norm_patchtokens"]          # (1, L, D)
+            tokens: torch.Tensor = out[0]                               # (L, D)
+
+            # subsample tokens per image for speed
+            L = tokens.shape[0]
+            if max_tokens_per_image is not None and L > max_tokens_per_image:
+                idx = torch.randperm(L, device=device)[:max_tokens_per_image]
+                tokens = tokens[idx]
+
+            token_bank.append(tokens.detach())
+
+    if len(token_bank) == 0:
+        raise ValueError("Calibration dataset is empty; cannot learn embedding entropy cfg.")
+
+    all_tokens = torch.cat(token_bank, dim=0)  # (M, D)
+
+    # cap total tokens for memory / speed
+    if max_total_tokens is not None and all_tokens.shape[0] > max_total_tokens:
+        idx = torch.randperm(all_tokens.shape[0], device=device)[:max_total_tokens]
+        all_tokens = all_tokens[idx]
+
+    # build codebook (using k-means)
+    codebook = build_codebook_kmeans(all_tokens, K=K, iters=10)
+
+    # compute per-image embedding entropy scores
+    entropies = []
+    for tokens in token_bank:
+        H = entropy_score_from_embeddings(tokens, codebook, tau=tau, soft=soft)
+        entropies.append(H)
+
+    ent = torch.tensor(entropies, dtype=torch.float32)
+
+    entropy_p5 = float(torch.quantile(ent, 0.05).item())
+    entropy_p95 = float(torch.quantile(ent, 0.95).item())
+
+    # build cfg with normalization stats
+    cfg: Dict[str, Any] = {
+        "entropy_p5": entropy_p5,
+        "entropy_p95": entropy_p95,
+        "rr_values": [float(rr0), float(rr1), float(rr2)],
+        "tail_frac": float(tail_frac),
+        "embed_entropy": {
+            "kind": "codebook_softassign" if soft else "codebook_hardassign",
+            "K": int(K),
+            "tau": float(tau),
+            "soft": bool(soft),
+            "max_tokens_per_image": int(max_tokens_per_image) if max_tokens_per_image is not None else None,
+            "seed": int(seed),
+        },
+        "codebook": codebook.detach().float().cpu().tolist(),
+    }
+
+    # thresholds in normalized space (reuse your normalize_entropy_score helper)
+    s_norm_list = [normalize_entropy_score(float(s), cfg) for s in entropies]
+    s_norm = torch.tensor(s_norm_list, dtype=torch.float32).clamp(0, 1)
+
+    t0 = float(torch.quantile(s_norm, tail_frac).item())
+    t1 = float(torch.quantile(s_norm, 1.0 - tail_frac).item())
+    cfg["rr_thresholds"] = [t0, t1]
+
+    if save_path is not None:
+        with open(save_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+    print(f"🩵🩵🩵Saved adaptive EMBED entropy cfg to {save_path}🩵🩵🩵")
+
+    return cfg
+
+@torch.no_grad()
+def entropy_score_from_imgs_embedding(
+    model: Pi3,
+    imgs: torch.Tensor,          # (B,N,3,H,W)
+    entropy_cfg: dict,
+    device: str = "cuda",
+    eps: float = 1e-8,
+) -> float:
+    """
+    Compute embedding-based entropy using encoder patch tokens + codebook.
+    Uses the SAME cfg normalization helpers as pixel entropy.
+    """
+    # ---- load codebook + params ----
+    codebook = torch.tensor(entropy_cfg["codebook"], device=device, dtype=torch.float32)  # (K,D)
+    tau = float(entropy_cfg.get("embed_entropy", {}).get("tau", 10.0))
+    soft = bool(entropy_cfg.get("embed_entropy", {}).get("soft", True))
+    max_tokens = entropy_cfg.get("embed_entropy", {}).get("max_tokens_per_image", None)
+
+    B, N, C, H, W = imgs.shape
+    imgs_bn = imgs.reshape(B * N, C, H, W).to(device)
+
+    # ---- match Pi3.forward normalization for encoder ----
+    imgs_bn = (imgs_bn - model.image_mean.to(device)) / model.image_std.to(device)
+
+    # ---- encoder only ----
+    out = model.encoder(imgs_bn, is_training=True)
+    if isinstance(out, dict):
+        out = out["x_norm_patchtokens"]   # (BN, L, D)
+
+    # ---- entropy per frame, then average ----
+    BN, L, D = out.shape
+    Cb = F.normalize(codebook, dim=-1)
+
+    ent_list = []
+    for i in range(BN):
+        X = out[i].float()                # (L, D)
+        X = F.normalize(X, dim=-1)
+
+        if max_tokens is not None and L > int(max_tokens):
+            idx = torch.randperm(L, device=device)[: int(max_tokens)]
+            X = X[idx]
+
+        logits = tau * (X @ Cb.t())       # (L, K)
+        if soft:
+            A = logits.softmax(dim=-1)
+            H = -(A * (A + eps).log()).sum(dim=-1).mean()
+            Hn = H / math.log(A.shape[-1] + 1e-12)
+            return float(Hn.item())
+        else:
+            k = logits.argmax(dim=-1)
+            p = torch.bincount(k, minlength=Cb.shape[0]).float()
+            p = p / p.sum().clamp_min(eps)
+
+        H = -(p * (p + eps).log()).sum()
+        Hn = H / torch.log(torch.tensor(float(p.numel()), device=device))
+        ent_list.append(Hn)
+
+    return float(torch.stack(ent_list).mean().item())
+
+
+def embedding_adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
+    """
+    Adaptive inference for monodepth using encoder-embedding entropy (codebook soft assignment).
+    """
+    imgs = load_and_resize14(
+        [file],
+        new_width=hydra_cfg.load_img_size,
+        device=hydra_cfg.device,
+        verbose=hydra_cfg.verbose
+    )
+
+    # compute EMBEDDING entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_embedding.json')
+    s = entropy_score_from_imgs_embedding(model, imgs, entropy_cfg, device=str(hydra_cfg.device))
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+
+    points = pred['local_points'][0]
+    depth_map = points[0, ..., -1].detach()
+    return depth_map
+
 
 def infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
 

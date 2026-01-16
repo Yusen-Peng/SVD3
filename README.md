@@ -5,7 +5,9 @@
 <h1 align="center">SVD-π3</h1>
 <h2 align="center">Data-adaptive SVD for Efficient Visual Geometry Learning</h2>
 
-## Data Adaptive SVD
+[Full Results on Overleaf](https://www.overleaf.com/project/68d89c98e6991a1fc59ea65e)
+
+## Data Adaptive SVD (entropy-guided)
 
 - [x] start with a *base* whitened + SVD-ed model with **40%** retention ratio
 - [x] during inference, **slice** to 30%, 20%, 10% retention ratio based on input's entropy in the test set
@@ -35,6 +37,22 @@ learned ``adaptive_cfg.json``:
 }
 ```
 
+## Data Adaptive SVD (encoder-embedding)
+
+idea: instead of checking the shannon entropy of input images, do it on the embedding after encoder layers
+- [x] apply k-means on embeddings (K=256) + compute entropy to allocate compression ratio (30%, 20%, 10%)  
+- [x] integrate its pipeline into evaluation
+
+results are bad though: 
+
+on Kitti 0.2711 Abs Rel versus 0.0984 (input-entropy-guided)
+
+potential explanation from ChatGPT: 
+- *"Pixel entropy survives domain shift better because it’s low-level; embedding entropy is very domain-sensitive."*
+
+
+
+
 
 ## Plain SVD baseline
 
@@ -52,9 +70,9 @@ CUDA_VISIBLE_DEVICES=0 pPYTHONNOUSERSITE=1 ython Pi3_main/SVDPi3.py --ckpt /data
 CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/scannetv2 --whitening_nsamples 256
 ```
 
-### Detailed illustration
+<!-- ### Detailed illustration
 
-![alt text](/plain_whitening.png)
+![alt text](/plain_whitening.png) -->
 
 ### Cholesky Decomposition does not always succeed
 
