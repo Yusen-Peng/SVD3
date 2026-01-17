@@ -19,9 +19,9 @@ pi3:
 
 
 eval_datasets:
-  # - sintel
+  - sintel
   # - tum
-  - scannetv2
+  # - scannetv2
 
 no_crop: False
 load_img_size: 512

@@ -969,6 +969,49 @@ def adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
     return end - start, depth_map, depth_conf
 
 
+def drifting_adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+    """
+    Adaptive inference for monodepth using early layer cos-sim drifting.
+    """
+    imgs = load_and_resize14(
+        filelist,
+        new_width=hydra_cfg.load_img_size,
+        device=hydra_cfg.device,
+        verbose=hydra_cfg.verbose
+    )
+
+    # compute drifting score + map to retention
+    drift_cfg = _load_drift_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_drifting.json')
+    
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+    
+    s = probe_cosine_drift_early_decoder(
+        model=model,
+        imgs=first,
+        probe_layers=drift_cfg.get("drift_probe", {}).get("probe_layers", 4),
+        ignore_special_tokens=drift_cfg.get("drift_probe", {}).get("ignore_special_tokens", True),
+        device=str(hydra_cfg.device),
+    )
+    s_norm = normalize_probe_score(s, drift_cfg)
+    rr = rr_from_entropy(s_norm, drift_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    start = time.time()
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    end = time.time()
+
+    depth_map = pred['local_points'][0, ..., -1]  # (N, h_14, w_14)
+    depth_conf = pred['conf'][0, ..., 0]          # (N, h_14, w_14)
+    return end - start, depth_map, depth_conf
+
+
 def infer_cameras_w2c(filelist: str, model: Pi3, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
@@ -1024,6 +1067,38 @@ def adaptive_infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: DictConfig)
 
     return poses_c2w_all[0], None
 
+def drifting_adaptive_infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute drifting score + map to retention
+    drift_cfg = _load_drift_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_drifting.json')
+    
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+    
+    s = probe_cosine_drift_early_decoder(
+        model=model,
+        imgs=first,
+        probe_layers=drift_cfg.get("drift_probe", {}).get("probe_layers", 4),
+        ignore_special_tokens=drift_cfg.get("drift_probe", {}).get("ignore_special_tokens", True),
+        device=str(hydra_cfg.device),
+    )
+    s_norm = normalize_probe_score(s, drift_cfg)
+    rr = rr_from_entropy(s_norm, drift_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+
+    poses_c2w_all = pred['camera_poses'].cpu()
+
+    return poses_c2w_all[0], None
 
 
 
@@ -1056,6 +1131,43 @@ def adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConf
     s = entropy_score_from_imgs(first, bins=256)
     s_norm = normalize_entropy_score(s, entropy_cfg)
     rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    
+    global_points = pred['points'][0]  # (N, h, w, 3)
+    global_points = F.interpolate(
+        global_points.permute(0, 3, 1, 2), data_size,
+        mode="bilinear", align_corners=False, antialias=True
+    ).permute(0, 2, 3, 1)  # align to gt
+
+    return global_points.cpu().numpy()
+
+def drifting_adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute drifting score + map to retention
+    drift_cfg = _load_drift_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_drifting.json')
+    
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+    
+    s = probe_cosine_drift_early_decoder(
+        model=model,
+        imgs=first,
+        probe_layers=drift_cfg.get("drift_probe", {}).get("probe_layers", 4),
+        ignore_special_tokens=drift_cfg.get("drift_probe", {}).get("ignore_special_tokens", True),
+        device=str(hydra_cfg.device),
+    )
+    s_norm = normalize_probe_score(s, drift_cfg)
+    rr = rr_from_entropy(s_norm, drift_cfg)
 
     # slice fraction relative to base checkpoint rank
     frac = min(1.0, rr / BASE_RR)

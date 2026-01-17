@@ -10,7 +10,7 @@ import rootutils
 import torch.nn as nn
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
-from utils.interfaces import infer_videodepth, adaptive_infer_videodepth, learn_entropy_cfg_from_calib
+from utils.interfaces import infer_videodepth, adaptive_infer_videodepth, learn_entropy_cfg_from_calib, learn_drift_cfg_from_calib, drifting_adaptive_infer_videodepth
 from utils.files import get_all_sequences, list_imgs_a_sequence
 from utils.messages import set_default_arg
 from videodepth.utils import save_depth_maps
@@ -24,7 +24,10 @@ def main(hydra_cfg: DictConfig):
     pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/monodepth.yaml
 
     # 0. create model
+    ADAPTIVE_MODE = 'drift' # 'input' or 'drift'
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
+
+    
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
     sd = load_file(ckpt, device=str(device))
@@ -43,15 +46,26 @@ def main(hydra_cfg: DictConfig):
             # re-load the calibration dataset
             cali_path = "/data/wanghaoxuan/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
             cali_white_data = torch.load(cali_path, map_location="cpu")
-            print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
-            learn_entropy_cfg_from_calib(
-                calib=cali_white_data,
-                save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
-                bins=256,
-                tail_frac=0.25,
-                rr_values=(0.1, 0.2, 0.3),
-                device=device
-            )
+            if ADAPTIVE_MODE == 'input':
+                print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
+                learn_entropy_cfg_from_calib(
+                    calib=cali_white_data,
+                    save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+                    bins=256,
+                    tail_frac=0.25,
+                    rr_values=(0.1, 0.2, 0.3),
+                    device=device
+                )
+            elif ADAPTIVE_MODE == 'drift':
+                print("🧨🧨🧨Learning adaptive drifting cfg from calibration data...🧨🧨🧨")
+                learn_drift_cfg_from_calib(
+                    calib=cali_white_data,
+                    model=model,
+                    save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_drifting.json',
+                    tail_frac=0.25,
+                    rr_values=(0.1, 0.2, 0.3),
+                    device=device
+                )
 
         else:
             install_twofactor_modules_from_sd(model, sd)
@@ -97,7 +111,11 @@ def main(hydra_cfg: DictConfig):
             # depth_maps: (N, H, W), torch.Tensor
             # conf_self: (N, H, W) torch.Tensor, or just None is ok
             if COMPRESSED and ADAPTIVE:
-                time_used, depth_maps, conf_self = adaptive_infer_videodepth(filelist, model, hydra_cfg)
+                if ADAPTIVE_MODE == 'input':
+                    time_used, depth_maps, conf_self = adaptive_infer_videodepth(filelist, model, hydra_cfg)
+                elif ADAPTIVE_MODE == 'drift':
+                    time_used, depth_maps, conf_self = drifting_adaptive_infer_videodepth(filelist, model, hydra_cfg) 
+
             else:
                 time_used, depth_maps, conf_self = infer_videodepth(filelist, model, hydra_cfg)
             
