@@ -1186,3 +1186,287 @@ def drifting_adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg:
     ).permute(0, 2, 3, 1)  # align to gt
 
     return global_points.cpu().numpy()
+
+
+def mix_max_norm(v, p5, p95):
+    denom = max(p95 - p5, 1e-6)
+    return (v - p5) / denom
+
+@torch.no_grad()
+def learn_augmented_entropy_cfg_from_calib(
+    calib: List[Dict[str, torch.Tensor]],
+    save_path: str = '/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_augmented.json',
+    bins: int = 256,
+    tail_frac: float = 0.25, # 25% low, 50% mid, 25% high => avg rr = 0.2
+    rr_values: Tuple[float, float, float] = (0.1, 0.2, 0.3),
+    device: str = "cuda",
+) -> Dict[str, Any]:
+
+    assert 0.0 < tail_frac < 0.5, "tail_frac must be in (0, 0.5)"
+    rr0, rr1, rr2 = rr_values
+    assert abs(rr1 - 0.2) < 1e-9, "This avg-control trick assumes middle rr is 0.2."
+
+
+    # collect per-component entropies
+    H_img_list  = []
+    H_bin_list  = []
+    H_edge_list = []
+
+
+    for batch in calib:
+        pv = batch["pixel_values"].to(device)  # (B,3,H,W)
+        B = pv.shape[0]
+        for b in range(B):
+            imgs = pv[b].unsqueeze(0).unsqueeze(0)  # (1,1,3,H,W)
+            H_img, H_bin, H_edge = augmented_entropy_score_from_imgs(imgs, bins=bins)
+
+            H_img_list.append(H_img)
+            H_bin_list.append(H_bin)
+            H_edge_list.append(H_edge)
+
+    if len(H_img_list) == 0 or len(H_bin_list) == 0 or len(H_edge_list) == 0:
+        raise ValueError("Calibration dataset is empty; cannot learn entropy cfg.")
+
+    # per-component p5 / p95
+    img_p5  = float(torch.quantile(H_img_list,  0.05).item())
+    img_p95 = float(torch.quantile(H_img_list,  0.95).item())
+    bin_p5  = float(torch.quantile(H_bin_list,  0.05).item())
+    bin_p95 = float(torch.quantile(H_bin_list,  0.95).item())
+    edge_p5  = float(torch.quantile(H_edge_list, 0.05).item())
+    edge_p95 = float(torch.quantile(H_edge_list, 0.95).item())
+
+    # build summed normalized score
+    s_norm_list = []
+    for h_img, h_bin, h_edge in zip(H_img_list, H_bin_list, H_edge_list):
+        h_img_n  = mix_max_norm(h_img,  img_p5,  img_p95)
+        h_bin_n  = mix_max_norm(h_bin,  bin_p5,  bin_p95)
+        h_edge_n = mix_max_norm(h_edge, edge_p5, edge_p95)
+
+        s = h_img_n + h_bin_n + h_edge_n
+        s_norm_list.append(s)
+
+    s_norm = torch.tensor(s_norm_list, dtype=torch.float32).clamp(0, 1e9)
+
+    # thresholds in summed-score space
+    t0 = float(torch.quantile(s_norm, tail_frac).item())
+    t1 = float(torch.quantile(s_norm, 1.0 - tail_frac).item())
+
+    # final cfg
+    cfg: Dict[str, Any] = {
+        "img_entropy_p5": img_p5,
+        "img_entropy_p95": img_p95,
+        "bin_entropy_p5": bin_p5,
+        "bin_entropy_p95": bin_p95,
+        "edge_entropy_p5": edge_p5,
+        "edge_entropy_p95": edge_p95,
+        "rr_values": [float(rr0), float(rr1), float(rr2)],
+        "tail_frac": float(tail_frac),
+    }
+
+    cfg["rr_thresholds"] = [t0, t1]
+
+    if save_path is not None:
+        with open(save_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+
+    print(f"🍀🍀🍀Saved 😈😈augmented😈😈 entropy cfg to {save_path} 🍀🍀🍀")
+    return cfg
+
+import cv2
+import numpy as np
+
+@torch.no_grad()
+def augmented_entropy_score_from_imgs(imgs: torch.Tensor, bins: int = 256) -> float:
+    assert imgs.ndim == 5 and imgs.shape[0] == 1 and imgs.shape[1] == 1 and imgs.shape[2] == 3, \
+        f"Expected (1,1,3,H,W), got {tuple(imgs.shape)}"
+
+    x = imgs[0, 0]  # (3,H,W)
+    # grayscale
+    gray = 0.2989 * x[0] + 0.5870 * x[1] + 0.1140 * x[2]  # (H,W)
+    gray = gray.clamp(0, 1)
+
+    # part 1: entropy of the raw gray image
+    # quantize to [0, bins-1]
+    q = (gray * (bins - 1)).to(torch.int64)  # (H,W)
+
+    hist = torch.bincount(q.flatten(), minlength=bins).float()
+    p = hist / (hist.sum() + 1e-12)
+    H_img = -(p * (p + 1e-12).log2()).sum()
+
+    # part 2: entropy of binarization map
+    gray_u8 = gray.mul(255.0).round().to(torch.uint8).cpu().numpy()
+    _, bin_u8 = cv2.threshold(gray_u8, 0, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
+    bin_mask = (bin_u8 > 0).astype(np.uint8)  # {0,1}
+    p1 = bin_mask.mean()          # foreground ratio
+    p0 = 1.0 - p1
+    eps = 1e-12
+    H_bin = 0.0
+    if p0 > 0:
+        H_bin -= p0 * np.log2(p0 + eps)
+    if p1 > 0:
+        H_bin -= p1 * np.log2(p1 + eps)
+
+    # part 3: entropy of Canny edges
+    gray_blur = cv2.GaussianBlur(gray_u8, (5, 5), 0)
+    edges_u8 = cv2.Canny(
+        gray_blur,
+        threshold1=50,
+        threshold2=150,
+        apertureSize=3,
+        L2gradient=True
+    )
+    edge_mask = (edges_u8 > 0).astype(np.uint8)  # {0,1}
+    p1 = edge_mask.mean()          # edge density in [0,1]
+    p0 = 1.0 - p1
+    eps = 1e-12
+    H_edge = 0.0
+    if p0 > 0:
+        H_edge -= p0 * np.log2(p0 + eps)
+    if p1 > 0:
+        H_edge -= p1 * np.log2(p1 + eps)
+
+    return H_img, H_bin, H_edge
+
+
+def augmented_adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
+    """
+        Adaptive inference for monodepth estimation using augmented entropy.
+    """
+
+    imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size,
+                             device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute augmented entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_augmented.json')
+    H_img, H_bin, H_edge = augmented_entropy_score_from_imgs(imgs, bins=256)
+
+    h_img_n  = mix_max_norm(H_img,  entropy_cfg["img_entropy_p5"],  entropy_cfg["img_entropy_p95"])
+    h_bin_n  = mix_max_norm(H_bin,  entropy_cfg["bin_entropy_p5"],  entropy_cfg["bin_entropy_p95"])
+    h_edge_n = mix_max_norm(H_edge, entropy_cfg["edge_entropy_p5"], entropy_cfg["edge_entropy_p95"])
+
+    s = h_img_n + h_bin_n + h_edge_n # a simple sum of **normalized** scores
+    s_norm = float(max(0.0, s))
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+
+    points = pred['local_points'][0]
+    depth_map = points[0, ..., -1].detach()
+    return depth_map
+
+def augmented_adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+    
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute augmented entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_augmented.json')
+    
+    # first image/frame only for entropy computation
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+
+    H_img, H_bin, H_edge = augmented_entropy_score_from_imgs(first, bins=256)
+
+    h_img_n  = mix_max_norm(H_img,  entropy_cfg["img_entropy_p5"],  entropy_cfg["img_entropy_p95"])
+    h_bin_n  = mix_max_norm(H_bin,  entropy_cfg["bin_entropy_p5"],  entropy_cfg["bin_entropy_p95"])
+    h_edge_n = mix_max_norm(H_edge, entropy_cfg["edge_entropy_p5"], entropy_cfg["edge_entropy_p95"])
+
+    s = h_img_n + h_bin_n + h_edge_n # a simple sum of **normalized** scores
+    s_norm = float(max(0.0, s))
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    start = time.time()
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    end = time.time()
+
+    depth_map = pred['local_points'][0, ..., -1]  # (N, h_14, w_14)
+    depth_conf = pred['conf'][0, ..., 0]          # (N, h_14, w_14)
+    return end - start, depth_map, depth_conf
+
+
+def augmented_adaptive_infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+    
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute augmented entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_augmented.json')
+    
+    # first image/frame only for entropy computation
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+
+    H_img, H_bin, H_edge = augmented_entropy_score_from_imgs(first, bins=256)
+
+    h_img_n  = mix_max_norm(H_img,  entropy_cfg["img_entropy_p5"],  entropy_cfg["img_entropy_p95"])
+    h_bin_n  = mix_max_norm(H_bin,  entropy_cfg["bin_entropy_p5"],  entropy_cfg["bin_entropy_p95"])
+    h_edge_n = mix_max_norm(H_edge, entropy_cfg["edge_entropy_p5"], entropy_cfg["edge_entropy_p95"])
+
+    s = h_img_n + h_bin_n + h_edge_n # a simple sum of **normalized** scores
+    s_norm = float(max(0.0, s))
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+
+    poses_c2w_all = pred['camera_poses'].cpu()
+
+    return poses_c2w_all[0], None
+
+
+def augmented_adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
+    
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute augmented entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_augmented.json')
+    
+    # first image/frame only for entropy computation
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+
+    H_img, H_bin, H_edge = augmented_entropy_score_from_imgs(first, bins=256)
+
+    h_img_n  = mix_max_norm(H_img,  entropy_cfg["img_entropy_p5"],  entropy_cfg["img_entropy_p95"])
+    h_bin_n  = mix_max_norm(H_bin,  entropy_cfg["bin_entropy_p5"],  entropy_cfg["bin_entropy_p95"])
+    h_edge_n = mix_max_norm(H_edge, entropy_cfg["edge_entropy_p5"], entropy_cfg["edge_entropy_p95"])
+
+    s = h_img_n + h_bin_n + h_edge_n # a simple sum of **normalized** scores
+    s_norm = float(max(0.0, s))
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    
+    global_points = pred['points'][0]  # (N, h, w, 3)
+    global_points = F.interpolate(
+        global_points.permute(0, 3, 1, 2), data_size,
+        mode="bilinear", align_corners=False, antialias=True
+    ).permute(0, 2, 3, 1)  # align to gt
+
+    return global_points.cpu().numpy()

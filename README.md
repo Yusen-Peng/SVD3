@@ -53,13 +53,20 @@ learned ``adaptive_cfg.json``:
 
 ### add visual-abstract features (proposal)
 
-- [x] inspired by the paper `Think with Visual Abstract' (ICLR 2026 submission 4/4/6/4)
-- [ ] binarization: use Otsu threshold (available OpenCV)
-- [ ] contour: use Canny edges (available OpenCV)
-- [ ] a simple sum after normalization as guide
+- inspired by the paper `Think with Visual Abstract' (ICLR 2026 submission 4/4/6/4)
+- [x] binarization: use Otsu threshold (available OpenCV)
+- [x] contour: use Canny edges (available OpenCV)
+- [x] a simple sum **after normalization** as guide
+- [x] wire up evaluation pipeline
 
 
+binarization example:
 
+![alt text](/otsu_binarization_example.png)
+
+contour example:
+
+![alt text](/canny_edge_detection_example.png)
 
 <!-- ## Data Adaptive SVD (encoder-embedding; bad)
 

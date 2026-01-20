@@ -13,7 +13,7 @@ from safetensors.torch import load_file
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
-from utils.interfaces import infer_cameras_c2w, adaptive_infer_cameras_c2w, learn_entropy_cfg_from_calib, learn_drift_cfg_from_calib, drifting_adaptive_infer_cameras_c2w
+from utils.interfaces import infer_cameras_c2w, adaptive_infer_cameras_c2w, learn_entropy_cfg_from_calib, learn_drift_cfg_from_calib, drifting_adaptive_infer_cameras_c2w, learn_augmented_entropy_cfg_from_calib, augmented_adaptive_infer_cameras_c2w
 from utils.files import list_imgs_a_sequence, get_all_sequences
 from utils.messages import set_default_arg, write_csv, save_list_of_matrices
 from relpose.evo_utils import calculate_averages, load_traj, eval_metrics, plot_trajectory, get_tum_poses, save_tum_poses
@@ -26,8 +26,11 @@ def main(hydra_cfg: DictConfig):
     pretrained_model_name_or_path: str = hydra_cfg.pi3.pretrained_model_name_or_path  # see configs/evaluation/monodepth.yaml
 
     # 0. create model
-    ADAPTIVE_MODE = 'drift' # 'input' or 'drift'
+    ADAPTIVE_MODE = 'input' # 'embedding' or 'input' or 'drift' ['input' is the best option so far]
+    AUGMENTED = True
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
+    
+
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
     sd = load_file(ckpt, device=str(device))
@@ -47,15 +50,27 @@ def main(hydra_cfg: DictConfig):
             cali_path = "/data/wanghaoxuan/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
             cali_white_data = torch.load(cali_path, map_location="cpu")
             if ADAPTIVE_MODE == 'input':
-                print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
-                learn_entropy_cfg_from_calib(
-                    calib=cali_white_data,
-                    save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
-                    bins=256,
-                    tail_frac=0.25,
-                    rr_values=(0.1, 0.2, 0.3),
-                    device=device
-                )
+                if not AUGMENTED:
+                    print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
+                    learn_entropy_cfg_from_calib(
+                        calib=cali_white_data,
+                        save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+                        bins=256,
+                        tail_frac=0.25,
+                        rr_values=(0.1, 0.2, 0.3),
+                        device=device
+                    )
+                else:
+                    print("🌟🌟🌟Learning adaptive AUGMENTED entropy cfg from calibration data...🌟🌟🌟")
+                    learn_augmented_entropy_cfg_from_calib(
+                        calib=cali_white_data,
+                        save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_augmented.json',
+                        bins=256,
+                        tail_frac=0.25,
+                        rr_values=(0.1, 0.2, 0.3),
+                        device=device
+                    )
+
             elif ADAPTIVE_MODE == 'drift':
                 print("🧨🧨🧨Learning adaptive drifting cfg from calibration data...🧨🧨🧨")
                 learn_drift_cfg_from_calib(
@@ -106,7 +121,10 @@ def main(hydra_cfg: DictConfig):
             # pr_intrs: focals + pps, (N, 3, 3), in numpy
             if COMPRESSED and ADAPTIVE:
                 if ADAPTIVE_MODE == 'input':
-                    pr_poses, pr_intrs = adaptive_infer_cameras_c2w(filelist, model, hydra_cfg)
+                    if not AUGMENTED:
+                        pr_poses, pr_intrs = adaptive_infer_cameras_c2w(filelist, model, hydra_cfg)
+                    else:
+                        pr_poses, pr_intrs = augmented_adaptive_infer_cameras_c2w(filelist, model, hydra_cfg)
                 elif ADAPTIVE_MODE == 'drift':
                     pr_poses, pr_intrs = drifting_adaptive_infer_cameras_c2w(filelist, model, hydra_cfg)
             else:
