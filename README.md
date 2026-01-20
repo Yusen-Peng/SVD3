@@ -7,15 +7,28 @@
 
 [Full Results on Overleaf](https://www.overleaf.com/project/68d89c98e6991a1fc59ea65e)
 
-## Data Adaptive SVD (entropy-guided; works fine 👍)
+## Baseline 1: plain SVD
 
-- [x] start with a *base* whitened + SVD-ed model with **40%** retention ratio
-- [x] during inference, **slice** to 30%, 20%, 10% retention ratio based on input's entropy in the test set
-  - slice: 
-    - z = x @ V[:r].T
-    - y = z @ U[:, :r].T + b
-- [x] compute shannon entropy score **s(x)** and slice the rank (according to learned entropy thresholds)
-- [x] using the calibration dataset, learn a mapping between entropy score s(x) and retention ratio (30% or 20% or 10%) while maintain **20%** retention ratio on average
+```bash
+# stay in 'SVD-pi3' (root directory)
+CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --baseline
+```
+
+## Baseline 2: data whitening SVD
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/scannetv2 --whitening_nsamples 256
+```
+
+## Data Adaptive SVD
+
+### entropy-guided approach ✅
+
+- start with a base whitened + SVD-ed model with 40\% retention ratio
+- using the calibration dataset, learn a mapping between entropy score s(x) and retention ratio (30\% or 20\% or 10\%) while maintain 20\% retention ratio on average
+- during inference, compute Shannon entropy score of input images and slice the rank according to learned entropy thresholds
+- slicing math: (z = x @ V[:r].T; y = z @ U[:, :r].T + b)
 
 
 learned ``adaptive_cfg.json``:
@@ -37,7 +50,18 @@ learned ``adaptive_cfg.json``:
 }
 ```
 
-## Data Adaptive SVD (encoder-embedding; bad)
+
+### add visual-abstract features (proposal)
+
+- [x] inspired by the paper `Think with Visual Abstract' (ICLR 2026 submission 4/4/6/4)
+- [ ] binarization: use Otsu threshold (available OpenCV)
+- [ ] contour: use Canny edges (available OpenCV)
+- [ ] a simple sum after normalization as guide
+
+
+
+
+<!-- ## Data Adaptive SVD (encoder-embedding; bad)
 
 idea: instead of checking the shannon entropy of input images, do it on the embedding after encoder layers
 - [x] apply k-means on embeddings (K=256) + compute entropy to allocate compression ratio (30%, 20%, 10%)  
@@ -48,10 +72,10 @@ results are bad though:
 on Kitti 0.2711 Abs Rel versus 0.0984 (input-entropy-guided)
 
 potential explanation from ChatGPT: 
-- *"Pixel entropy survives domain shift better because it’s low-level; embedding entropy is very domain-sensitive."*
+- *"Pixel entropy survives domain shift better because it’s low-level; embedding entropy is very domain-sensitive."* -->
 
 
-## Data Adaptive SVD (early-layer-cos-sim-drift)
+<!-- ## Data Adaptive SVD (early-layer-cos-sim-drift)
 
 idea: compute cosine similarity drift in early (4) layers to allocate compression ratio (30%, 20%, 10%) 
 - [x] cosine similarity drift scorer
@@ -81,30 +105,15 @@ learned ``adaptive_cfg_drifting.json``:
     0.6646890640258789
   ]
 }
-```
+``` -->
 
 
-## Plain SVD baseline
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --baseline
-```
-
-## Truncation-aware data whitening
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-CUDA_VISIBLE_DEVICES=0 pPYTHONNOUSERSITE=1 ython Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/sintel --whitening_nsamples 256
-# or use scannetv2 as calibration dataset (RECOMMENDED)
-CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/scannetv2 --whitening_nsamples 256
-```
 
 <!-- ### Detailed illustration
 
 ![alt text](/plain_whitening.png) -->
 
-### Cholesky Decomposition does not always succeed
+<!-- ### Cholesky Decomposition does not always succeed
 
 ```bash
 # collect the whitening matrix
