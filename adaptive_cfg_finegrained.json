@@ -1,0 +1,11 @@
+{
+  "entropy_p5": 0.6597831845283508,
+  "entropy_p95": 5.533994674682617,
+  "bins": 256,
+  "rr_min": 0.1,
+  "rr_max": 0.3,
+  "rr_target": 0.2,
+  "alpha": 6.0,
+  "beta": 0.49713133135810494,
+  "mapping": "sigmoid_budget_continuous"
+}

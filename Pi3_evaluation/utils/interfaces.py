@@ -445,6 +445,150 @@ def learn_entropy_cfg_from_calib(
 
     return cfg
 
+
+#### fine-grained budget mapping ####
+def sigmoid(x):
+    # supports float or torch.Tensor
+    if isinstance(x, torch.Tensor):
+        return 1.0 / (1.0 + torch.exp(-x))
+    else:
+        return 1.0 / (1.0 + math.exp(-float(x)))
+
+
+@torch.no_grad()
+def rr_from_snorm_fine_grained(
+    s_norm: torch.Tensor,  # shape: () or (N,)
+    rr_min: float,
+    rr_max: float,
+    alpha: float,
+    beta: float,
+) -> torch.Tensor:
+    return rr_min + (rr_max - rr_min) * sigmoid(alpha * (s_norm - beta))
+
+
+@torch.no_grad()
+def solve_beta_for_budget(
+    s_norm: torch.Tensor,          # (N,) in [0,1]
+    rr_min: float = 0.1,
+    rr_max: float = 0.3,
+    rr_target: float = 0.2,
+    alpha: float = 10.0,
+    beta_low: float = -1.0,
+    beta_high: float = 2.0,
+    iters: int = 30, # 30 iterations
+) -> float:
+    """
+        Binary search beta so that mean rr equals rr_target on calibration s_norm.
+        Monotonicity: mean_rr(beta) decreases as beta increases.
+    """
+    assert s_norm.ndim == 1 and s_norm.numel() > 0
+    s_norm = s_norm.clamp(0, 1)
+    lo, hi = float(beta_low), float(beta_high)
+    for _ in range(iters):
+        mid = 0.5 * (lo + hi)
+        mean_rr = rr_from_snorm_fine_grained(s_norm, rr_min, rr_max, alpha, mid).mean().item()
+        if mean_rr > rr_target:
+            # too much retention
+            # increase beta (shift right) to reduce rr
+            lo = mid
+        else:
+            # too little retention
+            # decrease beta (shift left) to increase rr
+            hi = mid
+
+    return 0.5 * (lo + hi)
+
+@torch.no_grad()
+def learn_entropy_cfg_continuous_from_calib(
+    calib: List[Dict[str, torch.Tensor]],
+    save_path: str = "/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_finegrained.json",
+    bins: int = 256,
+    rr_min: float = 0.1,
+    rr_max: float = 0.3,
+    rr_target: float = 0.2,
+    alpha: float = 10.0,
+    device: str = "cuda",
+) -> Dict[str, Any]:
+
+    entropies: List[float] = []
+
+    for batch in calib:
+        pv = batch["pixel_values"].to(device)  # (B,3,H,W)
+        B = pv.shape[0]
+        for b in range(B):
+            imgs = pv[b].unsqueeze(0).unsqueeze(0)  # (1,1,3,H,W)
+            H = entropy_score_from_imgs(imgs, bins=bins)
+            entropies.append(float(H))
+
+    if len(entropies) == 0:
+        raise ValueError("Calibration dataset is empty; cannot learn entropy cfg.")
+
+    ent = torch.tensor(entropies, dtype=torch.float32)
+
+    entropy_p5 = float(torch.quantile(ent, 0.05).item())
+    entropy_p95 = float(torch.quantile(ent, 0.95).item())
+
+    # normalize to s_norm in [0,1]
+    denom = max(entropy_p95 - entropy_p5, 1e-6)
+    s_norm = ((ent - entropy_p5) / denom).clamp(0, 1)
+
+    beta = solve_beta_for_budget(
+        s_norm=s_norm,
+        rr_min=rr_min,
+        rr_max=rr_max,
+        rr_target=rr_target,
+        alpha=alpha,
+        beta_low=-1.0,
+        beta_high=2.0,
+        iters=30,
+    )
+
+    cfg: Dict[str, Any] = {
+        "entropy_p5": entropy_p5,
+        "entropy_p95": entropy_p95,
+        "bins": int(bins),
+        "rr_min": float(rr_min),
+        "rr_max": float(rr_max),
+        "rr_target": float(rr_target),
+        "alpha": float(alpha),
+        "beta": float(beta),
+        "mapping": "sigmoid_budget_continuous",
+    }
+
+    if save_path is not None:
+        with open(save_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+
+    print(f"🍀🍀🍀Saved 🎃🎃Fine-Grained🎃🎃 adaptive entropy cfg to {save_path} 🍀🍀🍀")
+    print(f"   alpha={alpha:.2f}, beta={beta:.4f}")
+    return cfg
+
+
+
+
+@torch.no_grad()
+def rr_from_entropy_fine_grained_inference(s: float, cfg: dict) -> float:
+    """
+    Continuous mapping:
+        rr = rr_min + (rr_max-rr_min) * sigmoid(alpha * (s_norm - beta))
+    where:
+        s_norm = clip((s - p5)/(p95-p5), 0, 1)
+    """
+    p5  = float(cfg["entropy_p5"])
+    p95 = float(cfg["entropy_p95"])
+    denom = max(p95 - p5, 1e-6)
+    s_norm = (float(s) - p5) / denom
+    s_norm = float(min(1.0, max(0.0, s_norm)))
+
+    rr_min = float(cfg.get("rr_min", 0.1))
+    rr_max = float(cfg.get("rr_max", 0.3))
+    alpha  = float(cfg["alpha"])
+    beta   = float(cfg["beta"])
+
+    return rr_from_snorm_fine_grained(s_norm, rr_min, rr_max, alpha, beta)
+
+########################### ablation #################################
+
 def mix_max_norm(v, p5, p95):
     denom = max(p95 - p5, 1e-6)
     return (v - p5) / denom
@@ -563,6 +707,35 @@ def adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
     return depth_map
 
 
+@torch.no_grad()
+def fine_grained_adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
+    """
+    Fine-grained (continuous) adaptive inference for monodepth estimation.
+    Uses learned (p5,p95,beta) + fixed alpha to produce a continuous rr(x).
+    """
+
+    imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size,
+                            device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to continuous retention
+    entropy_cfg = _load_entropy_cfg("/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_finegrained.json")
+    s = entropy_score_from_imgs(imgs, bins=int(entropy_cfg.get("bins", 256)))
+    rr = rr_from_entropy_fine_grained_inference(s, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+        pred = model(imgs)
+
+    points = pred["local_points"][0]
+    depth_map = points[0, ..., -1].detach()
+    return depth_map
+
+
+
 def augmented_adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
     """
         Adaptive inference for monodepth estimation using augmented entropy.
@@ -580,6 +753,7 @@ def augmented_adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictCon
     h_edge_n = mix_max_norm(H_edge, entropy_cfg["edge_entropy_p5"], entropy_cfg["edge_entropy_p95"])
 
     s = h_img_n + h_bin_n + h_edge_n # a simple sum of **normalized** scores
+    # s = h_bin_n + h_edge_n # FIXME: ablation without image entropy
     s_norm = float(max(0.0, s))
     rr = rr_from_entropy(s_norm, entropy_cfg)
 
@@ -1153,6 +1327,38 @@ def adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
     depth_map = pred['local_points'][0, ..., -1]  # (N, h_14, w_14)
     depth_conf = pred['conf'][0, ..., 0]          # (N, h_14, w_14)
     return end - start, depth_map, depth_conf
+
+
+def fine_grained_adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+    
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to continuous retention
+    entropy_cfg = _load_entropy_cfg("/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg_finegrained.json")
+    
+    # first image/frame only for entropy computation
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+
+    s = entropy_score_from_imgs(first, bins=int(entropy_cfg.get("bins", 256)))
+    rr = rr_from_entropy_fine_grained_inference(s, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    start = time.time()
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    end = time.time()
+
+    depth_map = pred['local_points'][0, ..., -1]  # (N, h_14, w_14)
+    depth_conf = pred['conf'][0, ..., 0]          # (N, h_14, w_14)
+    return end - start, depth_map, depth_conf
+
+
 
 
 def augmented_adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):

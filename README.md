@@ -50,8 +50,7 @@ learned ``adaptive_cfg.json``:
 }
 ```
 
-
-### add visual-abstract features (proposal)
+### add visual-abstract features (does not gain improvement; we can put it into ablation study)
 
 - inspired by the paper `Think with Visual Abstract' (ICLR 2026 submission 4/4/6/4)
 - [x] binarization: use Otsu threshold (available OpenCV)
@@ -113,6 +112,10 @@ learned ``adaptive_cfg_drifting.json``:
   ]
 }
 ``` -->
+
+### fine-grained budget mapping (proposal)
+
+
 
 
 
