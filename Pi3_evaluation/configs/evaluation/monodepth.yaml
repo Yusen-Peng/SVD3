@@ -23,10 +23,9 @@ pi3:
   pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.4_BASE.safetensors
 
 
-
 eval_datasets:
-  # - sintel
-  # - bonn
+  - sintel
+  - bonn
   - kitti
 
 invariant: median-scale  # using median(gt) / median(pred) as scale factor
