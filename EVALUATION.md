@@ -1,5 +1,13 @@
 # Evaluation
 
+## Step 0: check the GPU first
+
+```bash
+nvidia-smi -i <ID>
+CUDA_VISIBLE_DEVICES=<ID> # if it works fine
+```
+
+
 ## Monocular Depth Estimation
 
 ```bash

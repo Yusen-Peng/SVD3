@@ -9,9 +9,11 @@ from safetensors.torch import load_file
 import rootutils
 import torch.nn as nn
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
+from vggt.models.vggt import VGGT
 from pi3.models.pi3 import Pi3
 from utils.interfaces import infer_videodepth, adaptive_infer_videodepth, learn_entropy_cfg_from_calib, learn_drift_cfg_from_calib, drifting_adaptive_infer_videodepth, learn_augmented_entropy_cfg_from_calib, augmented_adaptive_infer_videodepth
 from utils.interfaces import learn_entropy_cfg_continuous_from_calib, fine_grained_adaptive_infer_videodepth
+from utils.interfaces import infer_videodepth_VGGT
 from utils.files import get_all_sequences, list_imgs_a_sequence
 from utils.messages import set_default_arg
 from videodepth.utils import save_depth_maps
@@ -29,11 +31,14 @@ def main(hydra_cfg: DictConfig):
     AUGMENTED = False
     FINE_GRAINED = True
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
-    
+    USE_VGGT = True if 'vggt' in pretrained_model_name_or_path.lower() else False
+
 
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
-    sd = load_file(ckpt, device=str(device))
+    if not USE_VGGT:
+        sd = load_file(ckpt, device=str(device))
+
     if COMPRESSED:
         print(f"😎Loading the compressed Pi3 from {ckpt}...")
         # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
@@ -100,9 +105,13 @@ def main(hydra_cfg: DictConfig):
             install_twofactor_modules_from_sd(model, sd)
             model.load_state_dict(sd, strict=False)
     else:
-        print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
-        model = Pi3().to(device).eval()
-        model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
+        if USE_VGGT:
+            print(f"🤩🤩🤩Loading the VGGT from {ckpt}...🤩🤩🤩 on device {device}")
+            model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+        else:
+            print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
+            model = Pi3().to(device).eval()
+            model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
     model.to(device)
 
 
@@ -153,7 +162,10 @@ def main(hydra_cfg: DictConfig):
                     time_used, depth_maps, conf_self = drifting_adaptive_infer_videodepth(filelist, model, hydra_cfg) 
 
             else:
-                time_used, depth_maps, conf_self = infer_videodepth(filelist, model, hydra_cfg)
+                if USE_VGGT:
+                    time_used, depth_maps, conf_self = infer_videodepth_VGGT(filelist, model, hydra_cfg)
+                else:
+                    time_used, depth_maps, conf_self = infer_videodepth(filelist, model, hydra_cfg)
             
             logger.info(f"[{seq_idx}/{len(seq_list)}] Sequence {seq} processed, time: {time_used}, saving depth maps...")
 

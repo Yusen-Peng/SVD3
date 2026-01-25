@@ -236,18 +236,5 @@ class Pi3(nn.Module, PyTorchModelHubMixin):
             camera_poses=camera_poses,
         )
 
-class CompressedPi3(Pi3):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        # Replace all Linear layers with TwoFactorLinear stubs
-        for i, blk in enumerate(self.decoder):
-            for sub in ['attn', 'mlp']:
-                mod = getattr(blk, sub)
-                for name, layer in list(mod.named_children()):
-                    if isinstance(layer, nn.Linear):
-                        setattr(mod, name,
-                                TwoFactorLinear(layer.in_features,
-                                                layer.out_features,
-                                                W_u=torch.empty(layer.out_features, layer.in_features),
-                                                W_v=torch.empty(layer.in_features, layer.in_features),
-                                                bias=None))
+
+

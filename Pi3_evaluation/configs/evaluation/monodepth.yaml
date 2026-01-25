@@ -20,7 +20,10 @@ pi3:
 
   # pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors
 
-  pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.4_BASE.safetensors
+
+  # pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.4_BASE.safetensors
+
+  pretrained_model_name_or_path: vggt
 
 
 eval_datasets:

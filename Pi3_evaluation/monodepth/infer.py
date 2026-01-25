@@ -15,8 +15,10 @@ from safetensors.torch import load_file
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
+from vggt.models.vggt import VGGT
 from utils.interfaces import infer_monodepth, adaptive_infer_monodepth, embedding_adaptive_infer_monodepth, augmented_adaptive_infer_monodepth, learn_entropy_cfg_from_calib, learn_augmented_entropy_cfg_from_calib, learn_entropy_cfg_from_calib_embedding, learn_drift_cfg_from_calib, drifting_adaptive_infer_monodepth
 from utils.interfaces import learn_entropy_cfg_continuous_from_calib, fine_grained_adaptive_infer_monodepth
+from utils.interfaces import infer_monodepth_VGGT
 from utils.files import list_imgs_a_sequence, get_all_sequences
 from utils.messages import set_default_arg
 from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
@@ -34,11 +36,13 @@ def main(hydra_cfg: DictConfig):
     AUGMENTED = False
     FINE_GRAINED = True
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
-    
+    USE_VGGT = True if 'vggt' in pretrained_model_name_or_path.lower() else False
 
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
-    sd = load_file(ckpt, device=str(device))
+    if not USE_VGGT:
+        sd = load_file(ckpt, device=str(device))
+
     if COMPRESSED:
         print(f"😎Loading the compressed Pi3 from {ckpt}...")
         # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
@@ -117,9 +121,13 @@ def main(hydra_cfg: DictConfig):
             install_twofactor_modules_from_sd(model, sd)
             model.load_state_dict(sd, strict=False)
     else:
-        print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
-        model = Pi3().to(device).eval()
-        model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
+        if USE_VGGT:
+            print(f"🤩🤩🤩Loading the VGGT from {ckpt}...🤩🤩🤩 on device {device}")
+            model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+        else:
+            print(f"🥶🥶🥶Loading the ORIGINAL Pi3 from {ckpt}...🥶🥶🥶")
+            model = Pi3().to(device).eval()
+            model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
     model.to(device)
 
 
@@ -183,7 +191,10 @@ def main(hydra_cfg: DictConfig):
                     elif ADAPTIVE_MODE == 'drift':
                         depth_map = drifting_adaptive_infer_monodepth(file, model, hydra_cfg) 
                 else:
-                    depth_map = infer_monodepth(file, model, hydra_cfg)
+                    if USE_VGGT:
+                        depth_map = infer_monodepth_VGGT(file, model, hydra_cfg)
+                    else:
+                        depth_map = infer_monodepth(file, model, hydra_cfg)
 
                 # 3.2.3 save the depth map to the save_dir as npy
                 if isinstance(depth_map, torch.Tensor):

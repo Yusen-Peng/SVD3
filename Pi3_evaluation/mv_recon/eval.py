@@ -13,13 +13,14 @@ from omegaconf import DictConfig, ListConfig
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
+from vggt.models.vggt import VGGT
 from utils.interfaces import infer_mv_pointclouds, adaptive_infer_mv_pointclouds, learn_entropy_cfg_from_calib, learn_drift_cfg_from_calib, drifting_adaptive_infer_mv_pointclouds, learn_augmented_entropy_cfg_from_calib, augmented_adaptive_infer_mv_pointclouds
 from utils.interfaces import learn_entropy_cfg_continuous_from_calib, fine_grained_adaptive_infer_mv_pointclouds
+from utils.interfaces import infer_mv_pointclouds_VGGT
 from mv_recon.utils import umeyama, accuracy, completion
 from utils.messages import set_default_arg, write_csv
 from utils.vis_utils import save_image_grid_auto
 from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
-
 
 
 @hydra.main(version_base="1.2", config_path="../configs", config_name="eval")
@@ -30,14 +31,18 @@ def main(hydra_cfg: DictConfig):
 
     # 0. create model
     ADAPTIVE_MODE = 'input' # 'embedding' or 'input' or 'drift' ['input' is the best option so far]
+    
+    # false (not doing augmentation) leads to better results
     AUGMENTED = False
     FINE_GRAINED = True
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
-    
+    USE_VGGT = True if 'vggt' in pretrained_model_name_or_path.lower() else False
 
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
-    sd = load_file(ckpt, device=str(device))
+    if not USE_VGGT:
+        sd = load_file(ckpt, device=str(device))
+
     if COMPRESSED:
         print(f"😎Loading the compressed Pi3 from {ckpt}...")
         # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
@@ -77,7 +82,6 @@ def main(hydra_cfg: DictConfig):
                             alpha=6, # grid search (6, 8, 10) - 
                             device=device
                         )
-
                 else:
                     print("🌟🌟🌟Learning adaptive AUGMENTED entropy cfg from calibration data...🌟🌟🌟")
                     learn_augmented_entropy_cfg_from_calib(
@@ -88,7 +92,6 @@ def main(hydra_cfg: DictConfig):
                         rr_values=(0.1, 0.2, 0.3),
                         device=device
                     )
-
             elif ADAPTIVE_MODE == 'drift':
                 print("🧨🧨🧨Learning adaptive drifting cfg from calibration data...🧨🧨🧨")
                 learn_drift_cfg_from_calib(
@@ -104,9 +107,13 @@ def main(hydra_cfg: DictConfig):
             install_twofactor_modules_from_sd(model, sd)
             model.load_state_dict(sd, strict=False)
     else:
-        print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
-        model = Pi3().to(device).eval()
-        model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
+        if USE_VGGT:
+            print(f"🤩🤩🤩Loading the VGGT from {ckpt}...🤩🤩🤩 on device {device}")
+            model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+        else:
+            print(f"🥶🥶🥶Loading the ORIGINAL Pi3 from {ckpt}...🥶🥶🥶")
+            model = Pi3().to(device).eval()
+            model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
     model.to(device)
 
 
@@ -164,7 +171,10 @@ def main(hydra_cfg: DictConfig):
                     pred_pts: np.ndarray = drifting_adaptive_infer_mv_pointclouds(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
             
             else:
-                pred_pts: np.ndarray = infer_mv_pointclouds(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
+                if USE_VGGT:
+                    pred_pts: np.ndarray = infer_mv_pointclouds_VGGT(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
+                else:
+                    pred_pts: np.ndarray = infer_mv_pointclouds(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
             assert pred_pts.shape == gt_pts.shape, f"Predicted points shape {pred_pts.shape} does not match ground truth shape {gt_pts.shape}."
 
             # 4. save input images

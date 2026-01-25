@@ -22,6 +22,8 @@ import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
 from pi3.utils.geometry import se3_inverse
+from vggt.models.vggt import VGGT
+
 
 BASE_RR = 0.4
 
@@ -267,6 +269,26 @@ def infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
     points = pred['local_points'][0]         # (1, h_14, w_14, 3)
     depth_map = points[0, ..., -1].detach()  # (h_14, w_14)
     return depth_map  # torch.Tensor
+
+def infer_monodepth_VGGT(file: str, model: VGGT, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+
+    depth_map = pred["depth"][0, 0, :, :, 0].detach()   # (H, W)
+    return depth_map  # torch.Tensor
+
+
+
+
+
+
+
+
 
 #################################################################################################################
 
@@ -1298,6 +1320,22 @@ def infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
     return end - start, depth_map, depth_conf
 
 
+def infer_videodepth_VGGT(filelist: str, model: VGGT, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+    
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    start = time.time()
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    end = time.time()
+    depth_map = pred["depth"][0, :, :, :, 0]       # (S, H, W)
+    depth_conf  = pred["depth_conf"][0, :, :, :]     # (S, H, W)
+    return end - start, depth_map, depth_conf
+
+
 def adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
@@ -1480,6 +1518,45 @@ def infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: DictConfig):
     return poses_c2w_all[0], None
 
 
+from vggt.utils.pose_enc import pose_encoding_to_extri_intri
+def infer_cameras_c2w_VGGT(filelist: str, model: VGGT, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    
+    def invert_w2c_3x4_to_c2w_4x4(extri_w2c: torch.Tensor) -> torch.Tensor:
+        """
+        extri_w2c: (..., 3, 4) representing world->camera [R|t]
+        returns:   (..., 4, 4) representing camera->world
+        """
+        R = extri_w2c[..., :3, :3]          # (...,3,3)
+        t = extri_w2c[..., :3, 3:4]         # (...,3,1)
+
+        R_inv = R.transpose(-1, -2)         # R^T
+        t_inv = -R_inv @ t                  # -R^T t
+
+        eye = torch.eye(4, device=extri_w2c.device, dtype=extri_w2c.dtype)
+        T_c2w = eye.expand(extri_w2c.shape[:-2] + (4, 4)).clone()
+        T_c2w[..., :3, :3] = R_inv
+        T_c2w[..., :3, 3]  = t_inv.squeeze(-1)
+        return T_c2w
+
+
+    pose_enc = pred["pose_enc"]  # (B,S,9)
+    extri_w2c, _ = pose_encoding_to_extri_intri(pose_enc, imgs.shape[-2:])
+    poses_c2w = invert_w2c_3x4_to_c2w_4x4(extri_w2c)
+    return poses_c2w.cpu()[0], None
+
+
+
+
+
+
 def adaptive_infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
@@ -1606,10 +1683,6 @@ def drifting_adaptive_infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: Di
 
 
 
-
-
-
-
 def infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
@@ -1627,6 +1700,29 @@ def infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConfig, data_
     ).permute(0, 2, 3, 1)  # align to gt
 
     return global_points.cpu().numpy()
+
+
+def infer_mv_pointclouds_VGGT(filelist: str, model: VGGT, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    
+    global_points = pred['world_points'][0]  # (N, h, w, 3)
+    global_points = F.interpolate(
+        global_points.permute(0, 3, 1, 2), data_size,
+        mode="bilinear", align_corners=False, antialias=True
+    ).permute(0, 2, 3, 1)  # align to gt
+
+    return global_points.cpu().numpy()
+
+
+
+
 
 def adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
 
