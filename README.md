@@ -7,11 +7,17 @@
 
 [Full Results on Overleaf](https://www.overleaf.com/project/68d89c98e6991a1fc59ea65e)
 
+## Environment
+
+```bash
+source ~/envs/compress/bin/activate
+```
+
 ## Baseline 1: plain SVD
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
-CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --baseline
+CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --baseline
 ```
 
 ## Baseline 2: data whitening SVD
