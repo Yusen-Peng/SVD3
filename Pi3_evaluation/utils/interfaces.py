@@ -701,7 +701,7 @@ def learn_augmented_entropy_cfg_from_calib(
     return cfg
 
 
-def adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
+def adaptive_infer_monodepth(file: str, model: Pi3, save_path: str, hydra_cfg: DictConfig):
     """
         Adaptive inference for monodepth estimation.
     """
@@ -710,7 +710,7 @@ def adaptive_infer_monodepth(file: str, model: Pi3, hydra_cfg: DictConfig):
                              device=hydra_cfg.device, verbose=hydra_cfg.verbose)
 
     # compute entropy score + map to retention
-    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    entropy_cfg = _load_entropy_cfg(save_path)
     s = entropy_score_from_imgs(imgs, bins=256)
     s_norm = normalize_entropy_score(s, entropy_cfg)
     rr = rr_from_entropy(s_norm, entropy_cfg)

@@ -1,6 +1,6 @@
 kitti:
   type: video
-  root_path: /data/wanghaoxuan/kitti//depth_selection/val_selection_cropped
+  root_path: /data/wanghaoxuan/yusen_stuff/kitti/depth_selection/val_selection_cropped
   ls_all_seqs: ${data.kitti.root_path}/image_gathered
   img:
     path: ${data.kitti.root_path}/image_gathered/{seq}
@@ -11,7 +11,7 @@ kitti:
 
 bonn:
   type: video
-  root_path: /data/wanghaoxuan/rgbd_bonn_dataset
+  root_path: /data/wanghaoxuan/yusen_stuff/rgbd_bonn_dataset
   ls_all_seqs:
     - rgbd_bonn_crowd2
     - rgbd_bonn_crowd3
@@ -27,7 +27,7 @@ bonn:
 
 sintel:
   type: video
-  root_path: /data/wanghaoxuan/sintel/training
+  root_path: /data/wanghaoxuan/yusen_stuff/sintel/training
   ls_all_seqs:
     - alley_2
     - ambush_4

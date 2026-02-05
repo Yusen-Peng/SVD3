@@ -34,7 +34,11 @@ def main(hydra_cfg: DictConfig):
     
     # false (not doing augmentation) leads to better results
     AUGMENTED = False
-    FINE_GRAINED = True
+    FINE_GRAINED = False
+    DIVERSE_CALI = True
+
+
+
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
     USE_VGGT = True if 'vggt' in pretrained_model_name_or_path.lower() else False
 
@@ -56,7 +60,15 @@ def main(hydra_cfg: DictConfig):
             model.load_state_dict(sd_rest, strict=False)
 
             # re-load the calibration dataset
-            cali_path = "/data/wanghaoxuan/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+            if DIVERSE_CALI:
+                cali_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/curation/diverse_pi3_calib_nsamples256_size224_seed3.pt"
+                save_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/diverse_adaptive_cfg.json"
+                print("🌈🌈🌈Using DIVERSE calibration dataset for learning adaptive cfg...🌈🌈🌈")
+            else:
+                cali_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/curation/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+                save_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/adaptive_cfg.json"
+                print("🌟🌟🌟Using SCANNET calibration dataset for learning adaptive cfg...🌟🌟🌟")
+
             cali_white_data = torch.load(cali_path, map_location="cpu")
             if ADAPTIVE_MODE == 'input':
                 if not AUGMENTED:
@@ -64,7 +76,7 @@ def main(hydra_cfg: DictConfig):
                         print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
                         learn_entropy_cfg_from_calib(
                             calib=cali_white_data,
-                            save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+                            save_path=save_path,
                             bins=256,
                             tail_frac=0.25,
                             rr_values=(0.1, 0.2, 0.3),
@@ -181,7 +193,7 @@ def main(hydra_cfg: DictConfig):
                     if ADAPTIVE_MODE == 'input':
                         if not AUGMENTED:
                             if not FINE_GRAINED:
-                                depth_map = adaptive_infer_monodepth(file, model, hydra_cfg)
+                                depth_map = adaptive_infer_monodepth(file, model, save_path, hydra_cfg)
                             else:
                                 depth_map = fine_grained_adaptive_infer_monodepth(file, model, hydra_cfg)
                         else:

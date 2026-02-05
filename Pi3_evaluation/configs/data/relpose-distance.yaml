@@ -1,5 +1,5 @@
 sintel:
-  root_path: /data/wanghaoxuan/sintel/training
+  root_path: /data/wanghaoxuan/yusen_stuff/sintel/training
   ls_all_seqs:
     - alley_2
     - ambush_4
@@ -27,7 +27,7 @@ sintel:
     ext: cam
 
 tum:
-  root_path: /data/wanghaoxuan/tum
+  root_path: /data/wanghaoxuan/yusen_stuff/tum
   ls_all_seqs: ${data.tum.root_path}
   img:
     path: ${data.tum.root_path}/{seq}/rgb_90
@@ -41,7 +41,7 @@ tum:
     ext: txt
 
 scannetv2:
-  root_path: /data/wanghaoxuan/scannetv2
+  root_path: /data/wanghaoxuan/yusen_stuff/scannetv2
   ls_all_seqs: ${data.scannetv2.root_path}
   img:
     path: ${data.scannetv2.root_path}/{seq}/color_90

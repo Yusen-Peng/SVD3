@@ -1,5 +1,5 @@
 <p align="center">
-<img src="docs/SVD_Pi3.png" width="850"/>
+<img src="docs/arch.png" width="700"/>
 </p>
 
 <h1 align="center">SVD-π3</h1>
@@ -24,7 +24,9 @@ CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
-CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/scannetv2 --whitening_nsamples 256
+CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/yusen_stuff/scannetv2 --whitening_nsamples 256
+# or a diverse calibration dataset
+CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path diverse --whitening_nsamples 256
 ```
 
 ## Data Adaptive SVD
@@ -56,7 +58,60 @@ learned ``adaptive_cfg.json``:
 }
 ```
 
-### add visual-abstract features (does not gain improvement; we can put it into ablation study)
+
+
+## Evaluation
+
+### Step 0: check the GPU first
+
+```bash
+nvidia-smi -i <ID>
+CUDA_VISIBLE_DEVICES=<ID> # if it works fine
+```
+
+
+### Monocular Depth Estimation
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+PYTHONNOUSERSITE=1 python Pi3_evaluation/monodepth/infer.py
+PYTHONNOUSERSITE=1 python Pi3_evaluation/monodepth/eval.py
+```
+
+### Video Depth Estimation
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+PYTHONNOUSERSITE=1 python Pi3_evaluation/videodepth/infer.py
+PYTHONNOUSERSITE=1 python Pi3_evaluation/videodepth/eval.py
+```
+
+<!-- ## camera-angular
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+PYTHONNOUSERSITE=1 python Pi3_evaluation/relpose/eval_angle.py
+``` -->
+
+### camera-distance
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+PYTHONNOUSERSITE=1 python Pi3_evaluation/relpose/eval_dist.py
+```
+
+### point-map
+
+```bash
+# stay in 'SVD-pi3' (root directory)
+PYTHONNOUSERSITE=1 python Pi3_evaluation/mv_recon/eval.py
+# optional visualization
+PYTHONNOUSERSITE=1 python point_cloud_visualization_7scenes.py # for 7scenes
+PYTHONNOUSERSITE=1 python point_cloud_visualization_nrgbd.py # for NRGBD
+```
+
+
+<!-- ### add visual-abstract features (does not gain improvement; we can put it into ablation study)
 
 - inspired by the paper `Think with Visual Abstract' (ICLR 2026 submission 4/4/6/4)
 - [x] binarization: use Otsu threshold (available OpenCV)
@@ -71,7 +126,7 @@ binarization example:
 
 contour example:
 
-![alt text](/canny_edge_detection_example.png)
+![alt text](/canny_edge_detection_example.png) -->
 
 <!-- ## Data Adaptive SVD (encoder-embedding; bad)
 
@@ -119,7 +174,7 @@ learned ``adaptive_cfg_drifting.json``:
 }
 ``` -->
 
-### fine-grained budget mapping (proposal)
+<!-- ### fine-grained budget mapping (proposal) -->
 
 
 
