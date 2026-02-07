@@ -121,12 +121,11 @@ def vggt_svd_baseline(
 
     return model
 
-
-
+######################## whitening code ##############################
 
 @torch.no_grad()
-def Pi3_profile_svdllm_low_resource(
-    model: Pi3,
+def vggt_profile_svdllm_low_resource(
+    model: VGGT,
     calib_batches: List[Dict[str, torch.Tensor]],
     device: torch.device,
     autocast: bool = True,
@@ -134,25 +133,21 @@ def Pi3_profile_svdllm_low_resource(
     eps: float = 1e-6,
 ) -> Dict[str, torch.Tensor]:
     model.eval().to(device)
+    agg = model.aggregator
 
     # collect target Linear layers
     targets = OrderedDict()
-    for i, blk in enumerate(model.decoder):
-        blk: BlockRope = blk
-        if hasattr(blk, "attn"):
-            attn = blk.attn
-            if isinstance(getattr(attn, "qkv", None), nn.Linear):
-                targets[f"decoder.{i}.attn.qkv"] = attn.qkv
-            if isinstance(getattr(attn, "proj", None), nn.Linear):
-                targets[f"decoder.{i}.attn.proj"] = attn.proj
-        if hasattr(blk, "mlp"):
-            mlp = blk.mlp
-            if isinstance(getattr(mlp, "fc1", None), nn.Linear):
-                targets[f"decoder.{i}.mlp.fc1"] = mlp.fc1
-            if isinstance(getattr(mlp, "fc2", None), nn.Linear):
-                targets[f"decoder.{i}.mlp.fc2"] = mlp.fc2
+    for name, mod in agg.named_modules():
+        if name == "":
+            continue
 
-    print(f"✅ Found {len(targets)} Linear targets in Pi3.decoder to whiten")
+        # ✅ ONLY compress the "decoder-like" alternating-attention stacks
+        if not (name.startswith("frame_blocks.") or name.startswith("global_blocks.")):
+            continue
+
+        if isinstance(mod, nn.Linear) and _is_target_linear(name, mod):
+            targets[name] = mod
+    print(f"✅ Found {len(targets)} Linear targets in VGGT.aggregator to whiten")
 
     # initialize per-module accumulators
     # G = X^T * X, N = total rows collected
@@ -250,16 +245,6 @@ def Pi3_profile_svdllm_low_resource(
 
     return profiling_mat
 
-
-
-
-
-
-
-
-
-
-
 @torch.no_grad()
 def vggt_whitening(
     model: VGGT,
@@ -329,16 +314,13 @@ def vggt_whitening(
                 linear.bias.detach().to(target_device, dtype=target_dtype)
                 if linear.bias is not None else None
             )
-            parent = model
-            for p in parts[:-1]:
-                parent = getattr(parent, p)
-            setattr(parent, leaf,
-                TwoFactorLinear(
-                    in_features=linear.in_features,
-                    out_features=linear.out_features,
-                    W_u=W_u, W_v=W_v, bias=b
-                )
-            )
+            parent, leaf = _get_parent_module(agg, key)
+            setattr(parent, leaf, TwoFactorLinear(
+                in_features=linear.in_features,
+                out_features=linear.out_features,
+                W_u=W_u, W_v=W_v, bias=b
+            ))
+
             continue
         evals = sanitize(evals)
         mu = evals.abs().max().item()
@@ -374,21 +356,12 @@ def vggt_whitening(
             if linear.bias is not None else None
         )
 
-        parent = model
-        for p in parts[:-1]:
-            parent = getattr(parent, p)
-
-        setattr(
-            parent,
-            leaf,
-            TwoFactorLinear(
-                in_features=linear.in_features,
-                out_features=linear.out_features,
-                W_u=W_u,
-                W_v=W_v,
-                bias=b,
-            ),
-        )
+        parent, leaf = _get_parent_module(agg, key)
+        setattr(parent, leaf, TwoFactorLinear(
+            in_features=linear.in_features,
+            out_features=linear.out_features,
+            W_u=W_u, W_v=W_v, bias=b
+        ))
 
     print(f"✅ {fail_case} out of {len(layers)} layers fell back to plain SVD without whitening.✅")
 
@@ -431,8 +404,6 @@ def main():
 
 
     if not BASELINE:
-        # TODO
-
         # collect calibration data
         print("Start collecting calibration data...")
         cali_white_data = Pi3_get_calib_train_data(
@@ -446,7 +417,7 @@ def main():
         profiling_mat = vggt_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
 
         # apply whitening
-        Pi3_whitening(model, profiling_mat, args.ratio)
+        vggt_whitening(model, profiling_mat, args.ratio)
 
         # save the model using accelerate
         accelerator = Accelerator()
@@ -458,7 +429,7 @@ def main():
             dataset_name = 'scannet'
         else:
             raise NotImplementedError("This dataset is not supported yet.")
-        out_path = f"{args.save_path}/Pi3_whitening_only_{dataset_name}_{str(args.ratio)}_BASE.safetensors"
+        out_path = f"{args.save_path}/VGGT_whitening_only_{dataset_name}_{str(args.ratio)}.safetensors"
         save_file(state_dict, out_path)
     else:
         vggt_svd_baseline(model, args.ratio, args.DEV)
