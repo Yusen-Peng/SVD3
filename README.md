@@ -29,36 +29,6 @@ CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data
 CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path diverse --whitening_nsamples 256
 ```
 
-## Data Adaptive SVD
-
-### entropy-guided approach ✅
-
-- start with a base whitened + SVD-ed model with 40\% retention ratio
-- using the calibration dataset, learn a mapping between entropy score s(x) and retention ratio (30\% or 20\% or 10\%) while maintain 20\% retention ratio on average
-- during inference, compute Shannon entropy score of input images and slice the rank according to learned entropy thresholds
-- slicing math: (z = x @ V[:r].T; y = z @ U[:, :r].T + b)
-
-
-learned ``adaptive_cfg.json``:
-
-```JSON
-{
-  "entropy_p5": 0.6597831845283508,
-  "entropy_p95": 5.533994674682617,
-  "rr_values": [
-    0.1,
-    0.2,
-    0.3
-  ],
-  "tail_frac": 0.25,
-  "rr_thresholds": [
-    0.27931690216064453,
-    0.732358992099762
-  ]
-}
-```
-
-
 
 ## Evaluation
 
@@ -85,13 +55,6 @@ PYTHONNOUSERSITE=1 python Pi3_evaluation/monodepth/eval.py
 PYTHONNOUSERSITE=1 python Pi3_evaluation/videodepth/infer.py
 PYTHONNOUSERSITE=1 python Pi3_evaluation/videodepth/eval.py
 ```
-
-<!-- ## camera-angular
-
-```bash
-# stay in 'SVD-pi3' (root directory)
-PYTHONNOUSERSITE=1 python Pi3_evaluation/relpose/eval_angle.py
-``` -->
 
 ### camera-distance
 

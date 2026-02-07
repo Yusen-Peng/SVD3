@@ -76,6 +76,85 @@ def install_twofactor_modules_from_sd(model: Pi3, sd):
                 setattr(parent, leaf_name, tfl)
     return model
 
+
+
+def vggt_install_twofactor_modules_from_sd(model: VGGT, sd):
+    agg = model.aggregator
+
+    def _walk(root: nn.Module, dotted: str) -> nn.Module:
+        cur = root
+        for p in dotted.split("."):
+            if p.isdigit():
+                cur = cur[int(p)]          # ModuleList / Sequential
+            else:
+                cur = getattr(cur, p)
+        return cur
+
+    def _maybe_replace(base: str):
+        k_u_w = f"{base}.u.weight"
+        k_v_w = f"{base}.v.weight"
+        k_u_b = f"{base}.u.bias"
+
+        if (k_u_w not in sd) or (k_v_w not in sd):
+            return
+
+        parent_path, leaf_name = base.rsplit(".", 1)  # "...attn", "qkv"
+        parent = _walk(model, parent_path)
+        old = getattr(parent, leaf_name)
+
+        # Already installed? fine.
+        if isinstance(old, TwoFactorLinear):
+            return
+        if not isinstance(old, nn.Linear):
+            return
+
+        in_f, out_f = old.in_features, old.out_features
+        r = sd[k_v_w].shape[0]      # v.weight: (r, in)
+        has_bias = (k_u_b in sd)
+
+        tfl = TwoFactorLinear(in_features=in_f, out_features=out_f, r=r, has_bias=has_bias)
+        tfl = tfl.to(device=old.weight.device, dtype=old.weight.dtype)
+        setattr(parent, leaf_name, tfl)
+
+    for i in range(len(agg.frame_blocks)):
+        for leaf in _FACTOR_LEAVES:
+            _maybe_replace(f"aggregator.frame_blocks.{i}.{leaf}")
+
+    for i in range(len(agg.global_blocks)):
+        for leaf in _FACTOR_LEAVES:
+            _maybe_replace(f"aggregator.global_blocks.{i}.{leaf}")
+
+    return model
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 class SlicableTwoFactorLinear(nn.Module):
     """
     y = (x @ V^T) @ U^T + b
@@ -1336,12 +1415,12 @@ def infer_videodepth_VGGT(filelist: str, model: VGGT, hydra_cfg: DictConfig):
     return end - start, depth_map, depth_conf
 
 
-def adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+def adaptive_infer_videodepth(filelist: str, model: Pi3, save_path: str, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
 
     # compute entropy score + map to retention
-    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    entropy_cfg = _load_entropy_cfg(save_path)
     
     # first image/frame only for entropy computation
     first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
@@ -1554,15 +1633,12 @@ def infer_cameras_c2w_VGGT(filelist: str, model: VGGT, hydra_cfg: DictConfig):
 
 
 
-
-
-
-def adaptive_infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: DictConfig):
+def adaptive_infer_cameras_c2w(filelist: str, model: Pi3, save_path: str, hydra_cfg: DictConfig):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
 
     # compute entropy score + map to retention
-    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    entropy_cfg = _load_entropy_cfg(save_path)
     first = imgs[:, :1] # select first image only for entropy computation
     s = entropy_score_from_imgs(first, bins=256)
     s_norm = normalize_entropy_score(s, entropy_cfg)

@@ -1,0 +1,474 @@
+#coding:utf8
+from typing import OrderedDict, Tuple
+import warnings
+warnings.filterwarnings("ignore", message=".*RoPE2D.*")
+warnings.filterwarnings("ignore", message=".*version instead.*")
+warnings.filterwarnings("ignore", message=".*_register_pytree_node is deprecated.*")
+import os
+import sys
+
+current_path = os.path.dirname(os.path.abspath(__file__))
+parent_path  = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_path not in sys.path:
+    sys.path.insert(0, parent_path)
+from contextlib import nullcontext
+import argparse
+from safetensors.torch import load_file
+from tqdm import tqdm
+import torch
+from accelerate import Accelerator
+import torch.nn as nn
+from pi3.models.pi3 import Pi3
+from pi3.models.layers.block import BlockRope
+from typing import List, Dict
+
+from Pi3_main.data_utils import Pi3_get_calib_train_data
+from Pi3_main.svd_utils import safe_svd, sanitize, trunc_rank, TwoFactorLinear
+
+from vggt.models.vggt import VGGT
+
+def sync():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+def _get_parent_module(root: nn.Module, full_name: str):
+    """
+    Given 'a.b.c', returns (module_at_a.b, 'c').
+    Works with nested ModuleList indices too because PyTorch exposes them as attributes '0','1',...
+    """
+    if "." not in full_name:
+        return root, full_name
+    parent_name, leaf = full_name.rsplit(".", 1)
+    parent = root.get_submodule(parent_name)  # PyTorch >= 1.9
+    return parent, leaf
+
+def _is_target_linear(name: str, mod: nn.Module):
+    if not isinstance(mod, nn.Linear):
+        return False
+    # Keep this conservative: only compress the usual transformer linears
+    # (you can loosen this if you want more coverage)
+    return any(k in name for k in [
+        "attn.qkv", "attn.proj",
+        "mlp.fc1", "mlp.fc2",
+        "ffn.fc1", "ffn.fc2",  # in case naming differs
+        "proj", "qkv",         # fallback
+    ])
+
+@torch.no_grad()
+def vggt_svd_baseline(
+    model: VGGT,
+    ratio: float,
+    device: str,
+    verbose: bool = True,
+):
+    """
+    Plain SVD (no whitening) for VGGT aggregator only.
+    Replaces selected nn.Linear layers under model.aggregator with TwoFactorLinear.
+    """
+    model.eval()
+    agg = model.aggregator
+
+    dev = torch.device(device) if device is not None else next(model.parameters()).device
+
+    # 1) collect target linears inside aggregator
+    layers = OrderedDict()
+    for name, mod in agg.named_modules():
+        if name == "":
+            continue
+
+        # ✅ ONLY compress the "decoder-like" alternating-attention stacks
+        if not (name.startswith("frame_blocks.") or name.startswith("global_blocks.")):
+            continue
+
+        if isinstance(mod, nn.Linear) and _is_target_linear(name, mod):
+            layers[name] = mod
+    if verbose:
+        print(f"Start plain SVD (no whitening) for {len(layers)} Linear targets in VGGT.aggregator...")
+
+    # 2) compress + replace
+    for name, linear in tqdm(layers.items()):
+        linear: nn.Linear = linear
+        W = linear.weight.data.to(dev).float()
+        W = sanitize(W)
+        U, Svals, VT = safe_svd(W)
+
+        m, n = W.shape
+        r = int(m * n * ratio / (m + n))
+        r = max(1, min(r, Svals.shape[0]))  # clamp to [1, min(m,n)]
+
+        if verbose:
+            print(f"🔥 {name}: rank {Svals.shape[0]} -> {r}", flush=True)
+
+        U_r = U[:, :r]
+        S_r = sanitize(Svals[:r])
+        VT_r = VT[:r, :]
+
+        # TwoFactorLinear expects:
+        #   W_u: (out, r)  and  W_v: (r, in)
+        W_v = VT_r.detach().to(linear.weight.device, dtype=linear.weight.dtype)
+        W_u = (U_r * S_r.unsqueeze(0)).detach().to(linear.weight.device, dtype=linear.weight.dtype)
+        b = linear.bias.detach().to(linear.weight.device, dtype=linear.weight.dtype) if linear.bias is not None else None
+
+        parent, leaf = _get_parent_module(agg, name)
+        setattr(parent, leaf, TwoFactorLinear(
+            in_features=linear.in_features,
+            out_features=linear.out_features,
+            W_u=W_u, W_v=W_v, bias=b
+        ))
+
+    if verbose:
+        print(f"✅ Plain SVD low-rank replacement complete for {len(layers)} Linear layers in aggregator.✅")
+
+    return model
+
+
+
+
+@torch.no_grad()
+def Pi3_profile_svdllm_low_resource(
+    model: Pi3,
+    calib_batches: List[Dict[str, torch.Tensor]],
+    device: torch.device,
+    autocast: bool = True,
+    dtype: torch.dtype = torch.float16,
+    eps: float = 1e-6,
+) -> Dict[str, torch.Tensor]:
+    model.eval().to(device)
+
+    # collect target Linear layers
+    targets = OrderedDict()
+    for i, blk in enumerate(model.decoder):
+        blk: BlockRope = blk
+        if hasattr(blk, "attn"):
+            attn = blk.attn
+            if isinstance(getattr(attn, "qkv", None), nn.Linear):
+                targets[f"decoder.{i}.attn.qkv"] = attn.qkv
+            if isinstance(getattr(attn, "proj", None), nn.Linear):
+                targets[f"decoder.{i}.attn.proj"] = attn.proj
+        if hasattr(blk, "mlp"):
+            mlp = blk.mlp
+            if isinstance(getattr(mlp, "fc1", None), nn.Linear):
+                targets[f"decoder.{i}.mlp.fc1"] = mlp.fc1
+            if isinstance(getattr(mlp, "fc2", None), nn.Linear):
+                targets[f"decoder.{i}.mlp.fc2"] = mlp.fc2
+
+    print(f"✅ Found {len(targets)} Linear targets in Pi3.decoder to whiten")
+
+    # initialize per-module accumulators
+    # G = X^T * X, N = total rows collected
+    grams: Dict[str, torch.Tensor] = {}
+    counts: Dict[str, int] = {}
+    for k, lin in targets.items():
+        in_dim = lin.in_features
+        grams[k] = torch.zeros((in_dim, in_dim), dtype=torch.float64, device=device)
+        counts[k] = 0
+
+    # define hooks to collect statistics during the calibration forward passes
+    handles = []
+    def make_pre_hook(key: str):
+        def _hook(module: nn.Linear, inp):
+            # inp is a tuple; grab first
+            x = inp[0]
+            # expected shapes: (..., in_features)
+            x = x.detach()
+            # collapse all leading dims to rows
+            x = x.reshape(-1, x.shape[-1]).to(device, dtype=torch.float32)
+            # center? (optional) — for calibration whitening, uncentered is okay
+            G = x.T @ x   # (in_features, in_features) in float32
+            grams[key] += G.to(torch.float64)
+            counts[key] += x.shape[0]
+        return _hook
+
+    for key, lin in targets.items():
+        lin: nn.Linear = lin  # type check
+        handles.append(lin.register_forward_pre_hook(make_pre_hook(key)))
+    print(f"✅Registered {len(handles)} forward hooks!")
+
+
+    # run forward streaming through batches
+    amp_ctx = (
+        torch.amp.autocast(device_type="cuda", dtype=dtype) if (autocast and device.type == "cuda")
+        else nullcontext()
+    )
+
+    for b in tqdm(calib_batches):
+        imgs = b["pixel_values"].to(device)
+        # Pi3.forward expects (B, N, C, H, W). Our sampler returns (B, C, H, W).
+        # Use N=1.
+        imgs = imgs.unsqueeze(1)
+
+        with amp_ctx:
+            # here, PyTorch automatically invokes every registered forward_pre_hook
+            _ = model(imgs)
+    print(f"✅Completed streaming {len(calib_batches)} calibration batches")
+
+    # remove hooks
+    for h in handles:
+        h.remove()
+    print(f"✅Removed all {len(handles)} forward hooks")
+    torch.cuda.synchronize(device) if device.type == "cuda" else None
+
+    # build whitening matrices
+    profiling_mat: Dict[str, torch.Tensor] = {}
+
+    num_modules = len(targets)
+    print(f"Building {num_modules} Cholesky factors (on CPU)...")
+    fail_case = 0
+
+    for key in tqdm(targets.keys()):
+        n = max(1, counts[key])
+
+        # 1) CPU float64 & symmetrize
+        cov = (grams[key] / n).to(torch.float64).cpu()
+        cov = 0.5 * (cov + cov.T) # (n, n) where n = in_features
+
+        d = cov.shape[0]
+        I = torch.eye(d, dtype=cov.dtype, device=cov.device)
+
+        # scale-aware base shrinkage (Ledoit-Wolf style tiny alpha)
+        mu = float(cov.trace() / max(1, d))
+        base_eps = 1e-6 * max(1.0, mu)   # adapt to magnitude
+        cov_j = cov + base_eps * I # still (n, n) but after jitter
+
+        # 2) try Cholesky on CPU
+        try:
+            L = torch.linalg.cholesky(cov_j)
+        except Exception:
+            fail_case += 1
+            evals, Q = torch.linalg.eigh(cov_j)
+            lam = torch.clamp(evals, min=base_eps)
+            L = Q @ torch.diag(torch.sqrt(lam))
+
+        profiling_mat[key] = L
+
+    print(f"✅{num_modules - fail_case}/{num_modules} succeeded with Cholesky, {fail_case}/{num_modules} used EVD fallback")
+
+    # clean up
+    for k in grams:
+        grams[k] = None
+    torch.cuda.empty_cache()
+
+    return profiling_mat
+
+
+
+
+
+
+
+
+
+
+
+@torch.no_grad()
+def vggt_whitening(
+    model: VGGT,
+    profiling_mat: Dict[str, torch.Tensor],
+    ratio: float,
+    device=None,
+    eps: float = 1e-6,
+):
+    """
+    Low-rank SVD compression with activation-aware whitening.
+    profiling_mat[key] = L such that  Σ ≈ L @ L^T.
+    """
+    model.eval()
+    dev = torch.device(device) if device is not None else next(model.parameters()).device
+
+    # 1) Collect same target linear layers as baseline
+    layers = OrderedDict()
+
+    agg = model.aggregator
+    for name, mod in agg.named_modules():
+        if name == "":
+            continue
+
+        # ✅ ONLY compress the "decoder-like" alternating-attention stacks
+        if not (name.startswith("frame_blocks.") or name.startswith("global_blocks.")):
+            continue
+
+        if isinstance(mod, nn.Linear) and _is_target_linear(name, mod):
+            layers[name] = mod
+    print(f"Start plain SVD (no whitening) for {len(layers)} Linear targets in VGGT.aggregator...")
+
+
+    fail_case = 0
+
+    for key, linear in tqdm(layers.items()):
+        linear: nn.Linear = linear
+        parts = key.split(".")
+        leaf = parts[3]
+        W = linear.weight.data.to(dev).float()    # (out, in)
+        W = sanitize(W)
+        m, n = W.shape # m=out_features, n=in_features
+
+        L = profiling_mat[key].to(dev).float()    # (in, in)
+
+        Sigma = L @ L.T                           # (in, in)
+        Sigma = 0.5 * (Sigma + Sigma.T)           # force symmetry
+        try:
+            evals, Q = torch.linalg.eigh(Sigma)
+        except Exception:
+            # NOTE: if whitening failsm fall back to plain SVD baseline
+            fail_case += 1
+            print(f"[WARN] eigh(Σ) failed for {key}, using plain SVD.", flush=True)
+            U, Svals, VT = safe_svd(W)
+            r = trunc_rank(m, n, ratio)
+            r = min(r, Svals.shape[0])
+            U_r  = U[:, :r]
+            S_r  = sanitize(Svals[:r])
+            VT_r = VT[:r, :]
+            W_u = (U_r * S_r.unsqueeze(0)).detach()
+            W_v = VT_r.detach()
+            # install layer and continue
+            target_device = linear.weight.device
+            target_dtype  = linear.weight.dtype
+            W_u = W_u.to(target_device, dtype=target_dtype)
+            W_v = W_v.to(target_device, dtype=target_dtype)
+            b = (
+                linear.bias.detach().to(target_device, dtype=target_dtype)
+                if linear.bias is not None else None
+            )
+            parent = model
+            for p in parts[:-1]:
+                parent = getattr(parent, p)
+            setattr(parent, leaf,
+                TwoFactorLinear(
+                    in_features=linear.in_features,
+                    out_features=linear.out_features,
+                    W_u=W_u, W_v=W_v, bias=b
+                )
+            )
+            continue
+        evals = sanitize(evals)
+        mu = evals.abs().max().item()
+        floor = eps * max(1.0, mu)
+        lam = torch.clamp(evals, min=floor)
+        sqrt_lam = torch.sqrt(lam)
+        inv_sqrt_lam = 1.0 / sqrt_lam
+        Sigma_half = Q @ torch.diag(sqrt_lam) @ Q.T
+        Sigma_minushalf = Q @ torch.diag(inv_sqrt_lam) @ Q.T
+
+        # attention! 
+        # here, we start to actually apply whitening
+        M = W @ Sigma_half
+        U, Svals, VT = safe_svd(M)
+        r = trunc_rank(m, n, ratio)
+        r = min(r, Svals.shape[0])
+        print(f"🔥 [Whitening] Layer {key}: rank {Svals.shape[0]} → {r}")
+        U_r  = U[:, :r]
+        S_r  = sanitize(Svals[:r])
+        VT_r = VT[:r, :]
+
+        W_u = (U_r * S_r.unsqueeze(0)).detach() # (m, r)
+        W_v = (VT_r @ Sigma_minushalf).detach() # (r, n)
+
+        # --- 6) Install compressed layer ---
+        target_device = linear.weight.device
+        target_dtype  = linear.weight.dtype
+        W_u = W_u.to(target_device, dtype=target_dtype)
+        W_v = W_v.to(target_device, dtype=target_dtype)
+
+        b = (
+            linear.bias.detach().to(target_device, dtype=target_dtype)
+            if linear.bias is not None else None
+        )
+
+        parent = model
+        for p in parts[:-1]:
+            parent = getattr(parent, p)
+
+        setattr(
+            parent,
+            leaf,
+            TwoFactorLinear(
+                in_features=linear.in_features,
+                out_features=linear.out_features,
+                W_u=W_u,
+                W_v=W_v,
+                bias=b,
+            ),
+        )
+
+    print(f"✅ {fail_case} out of {len(layers)} layers fell back to plain SVD without whitening.✅")
+
+def main():
+
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('--model', type=str, default='jeffwan/llama-7b-hf', help='LLaMA model to load, pass `jeffwan/llama-7b-hf`')
+    parser.add_argument('--model_path', type=str, default=None, help='local compressed model path or whitening information path')
+    parser.add_argument('--run_low_resource', action='store_true', help='whether to run whitening in low resource, exp, compress LLaMA-7B below 15G gpu')
+    parser.add_argument('--dataset', type=str, default='wikitext2',help='Where to extract calibration data from [wikitext2, ptb, c4]')
+    parser.add_argument('--whitening_nsamples', type=int, default=256, help='Number of calibration data samples for whitening.')
+    parser.add_argument('--updating_nsamples', type=int, default=16, help='Number of calibration data samples for udpating.')
+    parser.add_argument('--save_path', type=str, default="/data/wanghaoxuan/SVD_Pi3_cache", help='the path to save the compressed model checkpoints.`')
+    parser.add_argument('--seed',type=int, default=0, help='Seed for sampling the calibration data')
+    parser.add_argument('--DEV', type=str, default="cuda", help='device')
+    parser.add_argument('--baseline', action='store_true', help='whether to run the baseline SVD (no whitening) mode')
+    parser.add_argument('--model_seq_len', type=int, default=2048, help='the default sequence length of the LLM')
+    parser.add_argument('--eval_batch_size', type=int, default=4, help='inference bactch size')
+    parser.add_argument('--gen_seq_len', type=int, default=1024, help='generated sequence len for efficiency evaluation')
+    parser.add_argument('--lora', type=str, default=None, help='the lora updated weight path to run the accuracy evaluation')
+    parser.add_argument("--interval", type=int, default=-1, help="Interval to sample image. Default: 1 for images dir, 10 for video")
+    parser.add_argument("--ckpt", type=str, default="Pi3_main/pi3_model.safetensors", help="Path to the model checkpoint file. Default: None")
+    parser.add_argument('--ratio', type=float, default=0.2, help='Target compression ratio,(0,1), default=0.2, means only keeping about 20% of the params.')
+    parser.add_argument("--device", type=str, default='cuda', help="Device to run inference on ('cuda' or 'cpu'). Default: 'cuda'")
+    parser.add_argument("--calibration_dataset_path", type=str, default="/data/wanghaoxuan/sintel", help="Path to the calibration dataset.")
+
+    args = parser.parse_args()
+    # NOTE: whether to run the baseline SVD (no whitening) mode
+    BASELINE = args.baseline
+
+    print(f"Running VGGT compression with ratio={args.ratio}, baseline mode={BASELINE}")
+
+    device = torch.device(args.device)
+    print(f"🤩🤩🤩Loading the VGGT...🤩🤩🤩 on device {device}")
+    model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+    model = model.eval()
+    print("✅ model loaded.")
+
+
+    if not BASELINE:
+        # TODO
+
+        # collect calibration data
+        print("Start collecting calibration data...")
+        cali_white_data = Pi3_get_calib_train_data(
+            root=args.calibration_dataset_path,
+            nsamples=args.whitening_nsamples
+        )
+        print(f"✅ collected {len(cali_white_data)} calibration batches with a total {sum(b['pixel_values'].shape[0] for b in cali_white_data)} images).")
+
+
+        # derive the whitening matrix via profiling
+        profiling_mat = vggt_profile_svdllm_low_resource(model, cali_white_data, device, autocast=True, dtype=torch.float16, eps=1e-6)
+
+        # apply whitening
+        Pi3_whitening(model, profiling_mat, args.ratio)
+
+        # save the model using accelerate
+        accelerator = Accelerator()
+        state_dict = accelerator.get_state_dict(model)
+        from safetensors.torch import save_file
+        if args.calibration_dataset_path.endswith('sintel'):
+            dataset_name = 'sintel'
+        elif 'scannet' in args.calibration_dataset_path.lower():
+            dataset_name = 'scannet'
+        else:
+            raise NotImplementedError("This dataset is not supported yet.")
+        out_path = f"{args.save_path}/Pi3_whitening_only_{dataset_name}_{str(args.ratio)}_BASE.safetensors"
+        save_file(state_dict, out_path)
+    else:
+        vggt_svd_baseline(model, args.ratio, args.DEV)
+        # save the model using accelerate
+        accelerator = Accelerator()
+        state_dict = accelerator.get_state_dict(model)
+        from safetensors.torch import save_file
+        out_path = f"{args.save_path}/VGGT_svd_baseline_{str(args.ratio)}.safetensors"
+        save_file(state_dict, out_path)    
+    print("✅✅✅ALL DONE!✅✅✅")
+
+if __name__ == "__main__":
+    main()
