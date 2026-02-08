@@ -19,6 +19,8 @@ from utils.messages import set_default_arg
 from videodepth.utils import save_depth_maps
 from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
 from utils.interfaces import vggt_install_twofactor_modules_from_sd
+from utils.interfaces import vggt_install_slicabletwofactor_modules_from_sd
+from utils.interfaces import adaptive_infer_videodepth_VGGT
 
 @hydra.main(version_base="1.2", config_path="../configs", config_name="eval")
 def main(hydra_cfg: DictConfig):
@@ -124,11 +126,31 @@ def main(hydra_cfg: DictConfig):
             if not COMPRESSED:
                 print(f"🤩🤩🤩Loading the ORIGINAL VGGT from {ckpt}...🤩🤩🤩 on device {device}")
                 model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
-            else: 
-                print(f"🥎🥎🥎Loading the COMPRESSED VGGT from {ckpt}...🥎🥎🥎 on device {device}")
-                model = VGGT().to(device).eval()
-                vggt_install_twofactor_modules_from_sd(model, sd)
-                model.load_state_dict(sd, strict=False)
+            else:
+                if not ADAPTIVE:
+                    print(f"🥎🥎🥎Loading the COMPRESSED VGGT from {ckpt}...🥎🥎🥎 on device {device}")
+                    model = VGGT().to(device).eval()
+                    vggt_install_twofactor_modules_from_sd(model, sd)
+                    model.load_state_dict(sd, strict=False)
+                else:
+                    print(f"🏈🏈🏈Loading the COMPRESSED and ADAPTIVE VGGT from {ckpt}...🏈🏈🏈 on device {device}")
+                    save_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/adaptive_cfg.json"
+                    
+                    cali_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+                    cali_white_data = torch.load(cali_path, map_location="cpu")
+
+                    learn_entropy_cfg_from_calib(
+                        calib=cali_white_data,
+                        save_path=save_path,
+                        bins=256,
+                        tail_frac=0.25,
+                        rr_values=(0.1, 0.2, 0.3),
+                        device=device
+                    )
+                    
+                    model = VGGT().to(device).eval()
+                    vggt_install_slicabletwofactor_modules_from_sd(model, sd)
+                    model.load_state_dict(sd, strict=False)
         else:
             print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
             model = Pi3().to(device).eval()
@@ -170,7 +192,7 @@ def main(hydra_cfg: DictConfig):
             # time_used: float, or List[float] (len = 2)
             # depth_maps: (N, H, W), torch.Tensor
             # conf_self: (N, H, W) torch.Tensor, or just None is ok
-            if COMPRESSED and ADAPTIVE:
+            if COMPRESSED and ADAPTIVE and not USE_VGGT:
                 if ADAPTIVE_MODE == 'input':
                     if not AUGMENTED:
                         if not FINE_GRAINED:
@@ -184,7 +206,10 @@ def main(hydra_cfg: DictConfig):
 
             else:
                 if USE_VGGT:
-                    time_used, depth_maps, conf_self = infer_videodepth_VGGT(filelist, model, hydra_cfg)
+                    if not ADAPTIVE:
+                        time_used, depth_maps, conf_self = infer_videodepth_VGGT(filelist, model, hydra_cfg)
+                    else:
+                        time_used, depth_maps, conf_self = adaptive_infer_videodepth_VGGT(filelist, model, save_path, hydra_cfg)
                 else:
                     time_used, depth_maps, conf_self = infer_videodepth(filelist, model, hydra_cfg)
             

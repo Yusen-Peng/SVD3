@@ -128,33 +128,6 @@ def vggt_install_twofactor_modules_from_sd(model: VGGT, sd):
 
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class SlicableTwoFactorLinear(nn.Module):
     """
     y = (x @ V^T) @ U^T + b
@@ -244,6 +217,95 @@ def install_slicabletwofactor_modules_from_sd(model: nn.Module, sd: dict):
                     tfl.bias.copy_(sd[k_u_b].to(tfl.bias.dtype))
                 _set_module_by_dotted(model, f"decoder.{i}.{leaf}", tfl)
     return model
+
+
+
+@torch.no_grad()
+def vggt_install_slicabletwofactor_modules_from_sd(model: VGGT, sd: dict, factor_leaves=_FACTOR_LEAVES):
+    agg = model.aggregator
+
+    def _walk(root: nn.Module, dotted: str) -> nn.Module:
+        cur = root
+        for p in dotted.split("."):
+            if p.isdigit():
+                cur = cur[int(p)]  # ModuleList / Sequential
+            else:
+                cur = getattr(cur, p)
+        return cur
+
+    def _maybe_replace(base: str):
+        k_u_w = f"{base}.u.weight"
+        k_v_w = f"{base}.v.weight"
+        k_u_b = f"{base}.u.bias"
+
+        if (k_u_w not in sd) or (k_v_w not in sd):
+            return False
+
+        parent_path, leaf_name = base.rsplit(".", 1)
+        parent = _walk(model, parent_path)
+        old = getattr(parent, leaf_name)
+
+        # already done / not a Linear => skip
+        if isinstance(old, SlicableTwoFactorLinear):
+            return False
+        if not isinstance(old, nn.Linear):
+            return False
+
+        in_f, out_f = old.in_features, old.out_features
+        r_max = sd[k_v_w].shape[0]  # v.weight: (r, in)
+        has_bias = (k_u_b in sd)
+
+        # sanity checks (optional but catches silent shape bugs)
+        u = sd[k_u_w]
+        v = sd[k_v_w]
+        assert v.shape[1] == in_f,  f"{base}: v.weight in_dim {v.shape[1]} != {in_f}"
+        assert u.shape[0] == out_f, f"{base}: u.weight out_dim {u.shape[0]} != {out_f}"
+        assert u.shape[1] == r_max, f"{base}: u.weight rank {u.shape[1]} != {r_max}"
+
+        tfl = SlicableTwoFactorLinear(in_features=in_f, out_features=out_f, r_max=r_max, bias=has_bias)
+        tfl = tfl.to(device=old.weight.device, dtype=old.weight.dtype)
+
+        # IMPORTANT: parameter names are V (r,in) and U (out,r)
+        tfl.V.copy_(v.to(device=tfl.V.device, dtype=tfl.V.dtype))
+        tfl.U.copy_(u.to(device=tfl.U.device, dtype=tfl.U.dtype))
+        if has_bias:
+            tfl.bias.copy_(sd[k_u_b].to(device=tfl.bias.device, dtype=tfl.bias.dtype))
+
+        setattr(parent, leaf_name, tfl)
+        return True
+
+    replaced = 0
+
+    # frame blocks
+    for i in range(len(agg.frame_blocks)):
+        for leaf in factor_leaves:
+            replaced += int(_maybe_replace(f"aggregator.frame_blocks.{i}.{leaf}"))
+
+    # global blocks
+    for i in range(len(agg.global_blocks)):
+        for leaf in factor_leaves:
+            replaced += int(_maybe_replace(f"aggregator.global_blocks.{i}.{leaf}"))
+
+    print(f"✅ Installed SlicableTwoFactorLinear for {replaced} modules (from state_dict).")
+    return model
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 def strip_factor_keys(sd: dict):
     sd2 = dict(sd)
@@ -806,6 +868,29 @@ def adaptive_infer_monodepth(file: str, model: Pi3, save_path: str, hydra_cfg: D
     points = pred['local_points'][0]
     depth_map = points[0, ..., -1].detach()
     return depth_map
+
+
+def adaptive_infer_monodepth_VGGT(file: str, model: VGGT, save_path: str, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg(save_path)
+    s = entropy_score_from_imgs(imgs, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg) 
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    depth_map = pred["depth"][0, 0, :, :, 0].detach()   # (H, W)
+    return depth_map  # torch.Tensor
 
 
 @torch.no_grad()
@@ -1445,6 +1530,35 @@ def adaptive_infer_videodepth(filelist: str, model: Pi3, save_path: str, hydra_c
     depth_conf = pred['conf'][0, ..., 0]          # (N, h_14, w_14)
     return end - start, depth_map, depth_conf
 
+def adaptive_infer_videodepth_VGGT(filelist: str, model: VGGT, save_path: str, hydra_cfg: DictConfig):
+
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+    
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg(save_path)
+    # first image/frame only for entropy computation
+    first = imgs[:, :1]   # -> (B, 1, 3, H, W) = (1, 1, 3, H, W)
+
+    s = entropy_score_from_imgs(first, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    start = time.time()
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    end = time.time()
+
+    depth_map = pred["depth"][0, :, :, :, 0]       # (S, H, W)
+    depth_conf  = pred["depth_conf"][0, :, :, :]     # (S, H, W)
+    return end - start, depth_map, depth_conf
+
 
 def fine_grained_adaptive_infer_videodepth(filelist: str, model: Pi3, hydra_cfg: DictConfig):
     
@@ -1657,6 +1771,53 @@ def adaptive_infer_cameras_c2w(filelist: str, model: Pi3, save_path: str, hydra_
     poses_c2w_all = pred['camera_poses'].cpu()
 
     return poses_c2w_all[0], None
+
+
+def adaptive_infer_cameras_c2w_VGGT(filelist: str, model: VGGT, save_path: str, hydra_cfg: DictConfig):
+    
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg(save_path)
+    first = imgs[:, :1] # select first image only for entropy computation
+    s = entropy_score_from_imgs(first, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    
+    def invert_w2c_3x4_to_c2w_4x4(extri_w2c: torch.Tensor) -> torch.Tensor:
+        """
+        extri_w2c: (..., 3, 4) representing world->camera [R|t]
+        returns:   (..., 4, 4) representing camera->world
+        """
+        R = extri_w2c[..., :3, :3]          # (...,3,3)
+        t = extri_w2c[..., :3, 3:4]         # (...,3,1)
+
+        R_inv = R.transpose(-1, -2)         # R^T
+        t_inv = -R_inv @ t                  # -R^T t
+
+        eye = torch.eye(4, device=extri_w2c.device, dtype=extri_w2c.dtype)
+        T_c2w = eye.expand(extri_w2c.shape[:-2] + (4, 4)).clone()
+        T_c2w[..., :3, :3] = R_inv
+        T_c2w[..., :3, 3]  = t_inv.squeeze(-1)
+        return T_c2w
+
+
+    pose_enc = pred["pose_enc"]  # (B,S,9)
+    extri_w2c, _ = pose_encoding_to_extri_intri(pose_enc, imgs.shape[-2:])
+    poses_c2w = invert_w2c_3x4_to_c2w_4x4(extri_w2c)
+    return poses_c2w.cpu()[0], None
+
+
 
 
 def fine_grained_adaptive_infer_cameras_c2w(filelist: str, model: Pi3, hydra_cfg: DictConfig):
