@@ -19,13 +19,13 @@ pi3:
   
 
   #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.4_BASE.safetensors
-  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.4_BASE.safetensors
+  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.4_BASE.safetensors
 
 
 
 
   #pretrained_model_name_or_path: vggt
-  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.2.safetensors
+  # pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.2.safetensors
   # pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.2.safetensors
   # pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.2_BASE.safetensors
 
@@ -33,7 +33,7 @@ pi3:
 
 
 eval_datasets:
-  # - sintel
+  - sintel
   - bonn
   - kitti
 

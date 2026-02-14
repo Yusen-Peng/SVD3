@@ -193,7 +193,7 @@ def _set_module_by_dotted(root, dotted: str, new_mod: nn.Module):
 
 
 @torch.no_grad()
-def install_slicabletwofactor_modules_from_sd(model: nn.Module, sd: dict):
+def install_slicabletwofactor_modules_from_sd(model: Pi3, sd: dict):
     for i, blk in enumerate(model.decoder):
         for leaf in _FACTOR_LEAVES:
             base = f"decoder.{i}.{leaf}"
@@ -294,10 +294,11 @@ def vggt_install_slicabletwofactor_modules_from_sd(model: VGGT, sd: dict, factor
 
 
 
-
-
-
-
+@torch.no_grad()
+def rr_from_entropy_ablation_most_compress(s_norm: float, cfg: dict) -> float:
+    th = cfg["rr_thresholds"]
+    rr = [0.1, 0.2, 0.3] # 10%, 20%, 30% compression ratios
+    return rr[0]
 
 
 
@@ -422,11 +423,6 @@ def infer_monodepth_VGGT(file: str, model: VGGT, hydra_cfg: DictConfig):
 
     depth_map = pred["depth"][0, 0, :, :, 0].detach()   # (H, W)
     return depth_map  # torch.Tensor
-
-
-
-
-
 
 
 
@@ -1514,6 +1510,9 @@ def adaptive_infer_videodepth(filelist: str, model: Pi3, save_path: str, hydra_c
     s_norm = normalize_entropy_score(s, entropy_cfg)
     rr = rr_from_entropy(s_norm, entropy_cfg)
 
+    # # FIXME: ablation
+    # rr = rr_from_entropy_ablation_most_compress(s_norm, entropy_cfg)
+
     # slice fraction relative to base checkpoint rank
     frac = min(1.0, rr / BASE_RR)
     set_model_rank_frac(model, frac)
@@ -1542,6 +1541,11 @@ def adaptive_infer_videodepth_VGGT(filelist: str, model: VGGT, save_path: str, h
     s = entropy_score_from_imgs(first, bins=256)
     s_norm = normalize_entropy_score(s, entropy_cfg)
     rr = rr_from_entropy(s_norm, entropy_cfg)
+
+
+
+    # # FIXME: ablation
+    # rr = rr_from_entropy_ablation_most_compress(s_norm, entropy_cfg)
 
     # slice fraction relative to base checkpoint rank
     frac = min(1.0, rr / BASE_RR)
@@ -1771,6 +1775,9 @@ def adaptive_infer_cameras_c2w(filelist: str, model: Pi3, save_path: str, hydra_
     poses_c2w_all = pred['camera_poses'].cpu()
 
     return poses_c2w_all[0], None
+
+
+
 
 
 def adaptive_infer_cameras_c2w_VGGT(filelist: str, model: VGGT, save_path: str, hydra_cfg: DictConfig):

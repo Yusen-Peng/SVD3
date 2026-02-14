@@ -39,6 +39,12 @@ nvidia-smi -i <ID>
 CUDA_VISIBLE_DEVICES=<ID> # if it works fine
 ```
 
+### Latency measurment
+
+```bash
+PYTHONNOUSERSITE=1 python Pi3_evaluation/latency_measure.py
+```
+
 
 ### Monocular Depth Estimation
 

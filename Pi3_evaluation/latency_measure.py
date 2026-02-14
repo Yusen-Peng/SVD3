@@ -2,8 +2,6 @@ import hydra
 import os
 import os.path as osp
 import numpy as np
-import cv2
-import logging
 import torch
 import time
 import torch.nn as nn
@@ -11,19 +9,76 @@ from tqdm import tqdm
 from omegaconf import DictConfig, ListConfig
 from safetensors.torch import load_file
 
-
 import rootutils
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
 from vggt.models.vggt import VGGT
-from utils.interfaces import infer_monodepth, adaptive_infer_monodepth, embedding_adaptive_infer_monodepth, augmented_adaptive_infer_monodepth, learn_entropy_cfg_from_calib, learn_augmented_entropy_cfg_from_calib, learn_entropy_cfg_from_calib_embedding, learn_drift_cfg_from_calib, drifting_adaptive_infer_monodepth
-from utils.interfaces import learn_entropy_cfg_continuous_from_calib, fine_grained_adaptive_infer_monodepth
-from utils.interfaces import infer_monodepth_VGGT
-from utils.files import list_imgs_a_sequence, get_all_sequences
-from utils.messages import set_default_arg
+from utils.interfaces import learn_entropy_cfg_from_calib, learn_augmented_entropy_cfg_from_calib, learn_entropy_cfg_from_calib_embedding, learn_drift_cfg_from_calib
+from utils.interfaces import learn_entropy_cfg_continuous_from_calib
 from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
+from utils.messages import set_default_arg
 
-@hydra.main(version_base="1.2", config_path="../configs", config_name="eval")
+MiB = 1024 ** 2
+
+
+def param_bytes(model: Pi3) -> int:
+    return sum(p.numel() * p.element_size() for p in model.parameters())
+
+def buffer_bytes(model: Pi3) -> int:
+    return sum(b.numel() * b.element_size() for b in model.buffers())
+
+def count_params(model: Pi3) -> int:
+    return sum(p.numel() for p in model.parameters())
+
+def checkpoint_size_mib(path: str) -> float:
+    return os.path.getsize(path) / MiB
+
+@torch.inference_mode()
+def gpu_param_footprint_mib(model: Pi3) -> float:
+    torch.cuda.synchronize()
+    torch.cuda.empty_cache()
+    torch.cuda.synchronize()
+    before = torch.cuda.memory_allocated()
+    _ = model  # no-op, but keep semantics obvious
+    torch.cuda.synchronize()
+    after = torch.cuda.memory_allocated()
+    stable = (param_bytes(model) + buffer_bytes(model)) / MiB
+    allocated = after / MiB
+    return stable, allocated
+
+
+@torch.inference_mode()
+def benchmark_on_memory(model: Pi3, dataset_cpu: torch.Tensor, autocast_dtype: torch.dtype, warmup: int = 50):
+    model.eval()
+    device = next(model.parameters()).device
+
+    assert dataset_cpu.ndim == 5, f"Expected (N,1,3,H,W), got {tuple(dataset_cpu.shape)}"
+    N = dataset_cpu.shape[0]
+
+    dataset_cpu = dataset_cpu.pin_memory()
+
+    peaks_bytes = np.empty(N, dtype=np.int64)
+
+    # warmup: cycle through first few samples
+    for i in range(warmup):
+        x = dataset_cpu[i % N : i % N + 1].to(device, non_blocking=True)  # (1,1,3,H,W)
+        with torch.autocast(device_type="cuda", dtype=autocast_dtype):
+            _ = model(x)
+    torch.cuda.synchronize()
+
+    # benchmark
+    for i in tqdm(range(N)):
+        torch.cuda.reset_peak_memory_stats()
+        x = dataset_cpu[i:i+1].to(device, non_blocking=True)
+        with torch.autocast(device_type="cuda", dtype=autocast_dtype):
+            _ = model(x)
+        peaks_bytes[i] = torch.cuda.max_memory_allocated()
+    peaks_mib = peaks_bytes / MiB
+    return float(peaks_mib.max())
+
+
+
+@hydra.main(version_base="1.2", config_path="./configs", config_name="eval")
 def main(hydra_cfg: DictConfig):
     all_eval_datasets: ListConfig      = hydra_cfg.eval_datasets  # see configs/evaluation/monodepth.yaml
     all_data_info: DictConfig          = hydra_cfg.data           # see configs/data/depth.yaml
@@ -35,8 +90,7 @@ def main(hydra_cfg: DictConfig):
     # false (not doing augmentation) leads to better results
     AUGMENTED = False
     FINE_GRAINED = False
-    DIVERSE_CALI = False
-
+    DIVERSE_CALI = True
 
 
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
@@ -52,7 +106,7 @@ def main(hydra_cfg: DictConfig):
         # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
         model = Pi3().to(device).eval()
 
-        ADAPTIVE = True if 'BASE' in pretrained_model_name_or_path else False
+        ADAPTIVE = True if 'base' in pretrained_model_name_or_path.lower() else False
         if ADAPTIVE:
             # support slicing
             install_slicabletwofactor_modules_from_sd(model, sd)
@@ -142,115 +196,24 @@ def main(hydra_cfg: DictConfig):
             model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
     model.to(device)
 
+    # synthesize data
+    torch.manual_seed(0)
+    torch.cuda.manual_seed_all(0)
+    inputs = torch.randn(256, 1, 3, 224, 224)  # CPU
+
+    # benchmarking
+    print("========================================")
+    print("checkpoint in GB:", checkpoint_size_mib(ckpt) / 1024)
+    print("#params in M", count_params(model) / 1e6)
+    peak_mem = benchmark_on_memory(model, inputs, autocast_dtype=torch.float16)
+    print(f"Peak GPU memory allocated during inference: {peak_mem:.2f} MiB")
+    print("========================================")
 
 
-    logger = logging.getLogger("monodepth-infer")
-    logger.info(f"Loaded Pi3 from {pretrained_model_name_or_path}")
 
-    for idx_dataset, dataset_name in enumerate(all_eval_datasets, start=1):
-        # 1. look up dataset config from configs/data
-        if dataset_name not in all_data_info:
-            raise ValueError(f"Unknown dataset: {dataset_name}")
-        dataset_info = all_data_info[dataset_name]
-
-        # 2. get the sequence list
-        if dataset_info.type == "video":
-            # most of the datasets have many sequences of video
-            seq_list = get_all_sequences(dataset_info)
-        elif dataset_info.type == "mono":
-            # some datasets (like nyu-v2) have only a set of images, only for monodepth
-            seq_list = [None]
-        else:
-            raise ValueError(f"Unknown dataset type: {dataset_info.type}")
-
-        # 3. infer for each sequence
-        output_root = osp.join(hydra_cfg.output_dir, dataset_name)
-        logger.info(f"[{idx_dataset}/{len(all_eval_datasets)}] Infering monodepth on {dataset_name} dataset..., output to {osp.relpath(output_root, hydra_cfg.work_dir)}")
-        
-        # keep track of the average time
-        time_dict = []
-
-        
-        for seq_idx, seq in enumerate(seq_list):
-            # 3.1 list the images in the sequence
-            filelist = list_imgs_a_sequence(dataset_info, seq)
-            save_dir = osp.join(output_root, seq) if seq is not None else output_root
-            os.makedirs(save_dir, exist_ok=True)
-            logger.info(f"[{seq_idx}/{len(seq_list)}] Processing {len(filelist)} images to {osp.relpath(save_dir, hydra_cfg.work_dir)}...")
-
-            
-            t1 = time.time()
-            # 3.2 infer for each image
-            for file in tqdm(filelist):
-                # 3.2.1 skip if the file already exists
-                npy_save_path = osp.join(save_dir, file.split('/')[-1].replace('.png', 'depth.npy'))
-                png_save_path = osp.join(save_dir, file.split('/')[-1].replace('.png', 'depth.png'))
-                if not hydra_cfg.overwrite and (osp.exists(npy_save_path) and osp.exists(png_save_path)):
-                    continue
-
-                # 3.2.2 infer the depth map
-                if COMPRESSED and ADAPTIVE:
-                    if ADAPTIVE_MODE == 'input':
-                        if not AUGMENTED:
-                            if not FINE_GRAINED:
-                                depth_map = adaptive_infer_monodepth(file, model, save_path, hydra_cfg)
-                            else:
-                                depth_map = fine_grained_adaptive_infer_monodepth(file, model, hydra_cfg)
-                        else:
-                            depth_map = augmented_adaptive_infer_monodepth(file, model, hydra_cfg)
-                    elif ADAPTIVE_MODE == 'embedding':
-                        depth_map = embedding_adaptive_infer_monodepth(file, model, hydra_cfg)
-                    elif ADAPTIVE_MODE == 'drift':
-                        depth_map = drifting_adaptive_infer_monodepth(file, model, hydra_cfg) 
-                else:
-                    if USE_VGGT:
-                        depth_map = infer_monodepth_VGGT(file, model, hydra_cfg)
-                    else:
-                        depth_map = infer_monodepth(file, model, hydra_cfg)
-
-                # 3.2.3 save the depth map to the save_dir as npy
-                if isinstance(depth_map, torch.Tensor):
-                    depth_map = depth_map.cpu().numpy()
-                elif not isinstance(depth_map, np.ndarray):
-                    raise ValueError(f"Unknown depth map type: {type(depth_map)}")
-                np.save(npy_save_path, depth_map)
-
-                # 3.2.4 also save the png
-                depth_map = (depth_map - depth_map.min()) / (depth_map.max() - depth_map.min())
-                depth_map = (depth_map * 255).astype(np.uint8)
-                cv2.imwrite(png_save_path, depth_map)
-            
-            t2 = time.time()
-            time_dict.append((t2 - t1, len(filelist)))
-
-        # for each dataset
-        logger.info(f"Monodepth inference for dataset {dataset_name} finished!")
-
-    del model
-    torch.cuda.empty_cache()
-    logger.info(f"Monodepth inference for Pi3 finished!")
-    
-    # dump time_dict into a CSV (headers: time, num_images)
-    if len(time_dict) > 0:
-        csv_path = "inference_time.csv"
-        with open(csv_path, 'w') as f:
-            f.write("time,num_images\n")
-            for t, n in time_dict:
-                f.write(f"{t},{n}\n")
-        logger.info(f"Saved inference time to {osp.relpath(csv_path, hydra_cfg.work_dir)}")
-        total_time = sum([t for t, n in time_dict])
-        total_images = sum([n for t, n in time_dict])
-        logger.info(f"Total inference time: {total_time:.2f} seconds for {total_images} images, average time per image: {total_time / total_images:.4f} seconds")
-
-    # compute the throughput based on the csv
-    if len(time_dict) > 0:
-        total_time = sum([t for t, n in time_dict])
-        total_images = sum([n for t, n in time_dict])
-        throughput = total_images / total_time
-        logger.info(f"Overall throughput: {throughput:.2f} images/second")
 
 if __name__ == "__main__":
     set_default_arg("evaluation", "monodepth")
     os.environ["HYDRA_FULL_ERROR"] = '1'
-    # os.environ["CUDA_LAUNCH_BLOCKING"] = '1'
     main()
+

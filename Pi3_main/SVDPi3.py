@@ -371,7 +371,6 @@ def main():
     parser.add_argument("--calibration_dataset_path", type=str, default="/data/wanghaoxuan/sintel", help="Path to the calibration dataset.")
 
     args = parser.parse_args()
-    # NOTE: whether to run the baseline SVD (no whitening) mode
     BASELINE = args.baseline
     print(f"Running Pi3 compression with ratio={args.ratio}, baseline mode={BASELINE}")
 
@@ -417,7 +416,7 @@ def main():
             dataset_name = 'scannet'
         else:
             raise NotImplementedError("This dataset is not supported yet.")
-        out_path = f"{args.save_path}/Pi3_whitening_only_{dataset_name}_{str(args.ratio)}_BASE.safetensors"
+        out_path = f"{args.save_path}/Pi3_whitening_only_{str(args.ratio)}.safetensors"
         save_file(state_dict, out_path)
     else:
         Pi3_svd_baseline(model, args.ratio, args.DEV)

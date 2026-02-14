@@ -323,9 +323,9 @@ def Pi3_get_calib_train_data(
         raise NotImplementedError("This dataset is not supported yet.")
 
 
-    # dump chosen images for reference
-    dump_dir = f"/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/curation/diverse"
-    dump_chosen_images(chosen, dump_dir)
+    # # dump chosen images for reference
+    # dump_dir = f"/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/curation/diverse"
+    # dump_chosen_images(chosen, dump_dir)
     return traindataset
 
 
