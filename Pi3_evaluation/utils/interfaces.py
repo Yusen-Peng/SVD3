@@ -25,7 +25,11 @@ from pi3.utils.geometry import se3_inverse
 from vggt.models.vggt import VGGT
 
 
+# NOTE: change it with other experiments
 BASE_RR = 0.4
+# BASE_RR = 0.5
+# BASE_RR = 0.6
+
 
 @lru_cache(maxsize=1)
 def _load_entropy_cfg(path: str):
@@ -290,22 +294,11 @@ def vggt_install_slicabletwofactor_modules_from_sd(model: VGGT, sd: dict, factor
     return model
 
 
-
-
-
-
 @torch.no_grad()
 def rr_from_entropy_ablation_most_compress(s_norm: float, cfg: dict) -> float:
     th = cfg["rr_thresholds"]
     rr = [0.1, 0.2, 0.3] # 10%, 20%, 30% compression ratios
     return rr[0]
-
-
-
-
-
-
-
 
 
 def strip_factor_keys(sd: dict):
@@ -524,7 +517,11 @@ def augmented_entropy_score_from_imgs(imgs: torch.Tensor, bins: int = 256) -> fl
 @torch.no_grad()
 def rr_from_entropy(s_norm: float, cfg: dict) -> float:
     th = cfg["rr_thresholds"]
+    
+    # NOTE: change these with other experiments
     rr = [0.1, 0.2, 0.3] # 10%, 20%, 30% compression ratios
+    #rr = [0.2, 0.3, 0.4] # 20%, 30%, 40% compression ratios
+    #rr = [0.3, 0.4, 0.5] # 30%, 40%, 50% compression ratios
 
     if s_norm < th[0]:
         return rr[0]
@@ -868,8 +865,8 @@ def adaptive_infer_monodepth(file: str, model: Pi3, save_path: str, hydra_cfg: D
 
 def adaptive_infer_monodepth_VGGT(file: str, model: VGGT, save_path: str, hydra_cfg: DictConfig):
 
-    imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
-
+    imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size,
+                             device=hydra_cfg.device, verbose=hydra_cfg.verbose)
 
     # compute entropy score + map to retention
     entropy_cfg = _load_entropy_cfg(save_path)
@@ -1541,8 +1538,6 @@ def adaptive_infer_videodepth_VGGT(filelist: str, model: VGGT, save_path: str, h
     s = entropy_score_from_imgs(first, bins=256)
     s_norm = normalize_entropy_score(s, entropy_cfg)
     rr = rr_from_entropy(s_norm, entropy_cfg)
-
-
 
     # # FIXME: ablation
     # rr = rr_from_entropy_ablation_most_compress(s_norm, entropy_cfg)

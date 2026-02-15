@@ -6,24 +6,34 @@ defaults:
 name: monodepth
 
 pi3:
-  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/model.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/pi3_model.safetensors
 
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.4.safetensors
 
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_0.2.safetensors
-  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_0.3.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_0.3.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_0.4.safetensors
+
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_0.4_BASE.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_0.5_BASE.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_0.6_BASE.safetensors
 
 
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/vggt_model.safetensors    
 
-  #pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.2.safetensors
-  # pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_0.2_ALL.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.2.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.3.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.4.safetensors
 
-  # pretrained_model_name_or_path: /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.2.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.3.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.4.safetensors
 
-  # pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.4_BASE.safetensors
-  # pretrained_model_name_or_path: vggt
+  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.4_BASE.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.5_BASE.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.6_BASE.safetensors
 
 eval_datasets:
   - sintel
