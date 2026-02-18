@@ -37,11 +37,9 @@ def main(hydra_cfg: DictConfig):
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
     USE_VGGT = True if 'vggt' in pretrained_model_name_or_path.lower() else False
 
-
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
-    if not USE_VGGT or COMPRESSED:
-        sd = load_file(ckpt, device=str(device))
+    sd = load_file(ckpt, device=str(device))
 
     if COMPRESSED and not USE_VGGT:
         print(f"😎Loading the compressed Pi3 from {ckpt}...")
@@ -120,12 +118,13 @@ def main(hydra_cfg: DictConfig):
             model.load_state_dict(sd, strict=False)
     else:
 
-        ADAPTIVE = ('base' in pretrained_model_name_or_path.lower()) and ('baseline' not in pretrained_model_name_or_path.lower())
+        ADAPTIVE = 'BASE' in pretrained_model_name_or_path
 
         if USE_VGGT:
             if not COMPRESSED:
                 print(f"🤩🤩🤩Loading the ORIGINAL VGGT from {ckpt}...🤩🤩🤩 on device {device}")
-                model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+                model = VGGT().to(device).eval()
+                model.load_state_dict(sd, strict=True)
             else:
                 if not ADAPTIVE:
                     print(f"🥎🥎🥎Loading the COMPRESSED VGGT from {ckpt}...🥎🥎🥎 on device {device}")
@@ -156,7 +155,6 @@ def main(hydra_cfg: DictConfig):
             model = Pi3().to(device).eval()
             model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
     model.to(device)
-
 
     logger = logging.getLogger("videodepth-infer")
     logger.info(f"Loaded Pi3 from {pretrained_model_name_or_path}")

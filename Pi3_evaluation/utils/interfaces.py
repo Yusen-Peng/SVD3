@@ -294,11 +294,6 @@ def vggt_install_slicabletwofactor_modules_from_sd(model: VGGT, sd: dict, factor
     return model
 
 
-@torch.no_grad()
-def rr_from_entropy_ablation_most_compress(s_norm: float, cfg: dict) -> float:
-    th = cfg["rr_thresholds"]
-    rr = [0.1, 0.2, 0.3] # 10%, 20%, 30% compression ratios
-    return rr[0]
 
 
 def strip_factor_keys(sd: dict):

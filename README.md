@@ -13,6 +13,13 @@
 source ~/envs/compress/bin/activate
 ```
 
+## Latency/Efficiency eval
+
+```bash
+PYTHONNOUSERSITE=1 CUDA_VISIBLE_DEVICES=1 python Pi3_evaluation/latency_measure.py
+```
+
+
 ## Baseline 1: plain SVD
 
 For Pi3:

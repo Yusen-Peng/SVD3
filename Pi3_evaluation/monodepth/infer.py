@@ -121,7 +121,7 @@ def main(hydra_cfg: DictConfig):
             model.load_state_dict(sd, strict=False)
     else:
 
-        ADAPTIVE = ('base' in pretrained_model_name_or_path.lower()) and ('baseline' not in pretrained_model_name_or_path.lower())
+        ADAPTIVE = 'BASE' in pretrained_model_name_or_path
 
         if USE_VGGT:
             if not COMPRESSED:

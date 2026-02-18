@@ -8,8 +8,9 @@ import torch.nn as nn
 from tqdm import tqdm
 from omegaconf import DictConfig, ListConfig
 from safetensors.torch import load_file
+from typing import Union
 
-import rootutils
+import rootutils    
 root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True)
 from pi3.models.pi3 import Pi3
 from vggt.models.vggt import VGGT
@@ -76,6 +77,33 @@ def benchmark_on_memory(model: Pi3, dataset_cpu: torch.Tensor, autocast_dtype: t
         peaks_bytes[i] = torch.cuda.max_memory_allocated()
     peaks_mib = peaks_bytes / MiB
     return float(peaks_mib.max())
+
+
+
+@torch.inference_mode()
+def measure_gflops_fvcore(model: Union[Pi3, VGGT], example_input: torch.Tensor):
+    """
+    Returns GFLOPs for a single forward on example_input.
+
+    Note:
+      - Counts are *theoretical* op counts from traced graph.
+      - Custom CUDA ops / some attention kernels may be missed or undercounted.
+    """
+    try:
+        from fvcore.nn import FlopCountAnalysis
+    except ImportError as e:
+        raise ImportError(
+            "fvcore not installed. Install with: pip install fvcore"
+        ) from e
+
+    model.eval()
+    device = next(model.parameters()).device
+    x = example_input.to(device)
+
+    # fvcore expects args as a tuple
+    flops = FlopCountAnalysis(model, (x,)).total()  # number of FLOPs
+    gflops = flops / 1e9
+    return float(gflops)
 
 
 
@@ -230,14 +258,16 @@ def main(hydra_cfg: DictConfig):
     # synthesize data
     torch.manual_seed(0)
     torch.cuda.manual_seed_all(0)
-    inputs = torch.randn(256, 1, 3, 224, 224)  # CPU
+    inputs = torch.randn(1, 1, 3, 224, 224)  # CPU
 
     # benchmarking
     print("========================================")
     print("checkpoint in GB:", checkpoint_size_mib(ckpt) / 1024)
     print("#params in M", count_params(model) / 1e6)
-    peak_mem = benchmark_on_memory(model, inputs, autocast_dtype=torch.float16)
-    print(f"Peak GPU memory allocated during inference: {peak_mem:.2f} MiB")
+    #peak_mem = benchmark_on_memory(model, inputs, autocast_dtype=torch.float16)
+    gflops = measure_gflops_fvcore(model, inputs)
+    #print(f"Peak GPU memory allocated during inference: {peak_mem:.2f} MiB")
+    print(f"GFLOPs for a single forward pass: {gflops:.2f}")
     print("========================================")
 
 

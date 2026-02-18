@@ -437,7 +437,7 @@ def main():
         accelerator = Accelerator()
         state_dict = accelerator.get_state_dict(model)
         from safetensors.torch import save_file
-        out_path = f"{args.save_path}/VGGT_svd_baseline_{str(args.ratio)}.safetensors"
+        out_path = f"{args.save_path}/VGGT_svd_baseline_{str(args.ratio)}_BASE.safetensors"
         save_file(state_dict, out_path)    
     print("✅✅✅ALL DONE!✅✅✅")
 
