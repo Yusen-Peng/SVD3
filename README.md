@@ -5,8 +5,6 @@
 <h1 align="center">SVD-π3</h1>
 <h2 align="center">Data-adaptive SVD for Efficient Visual Geometry Learning</h2>
 
-[Full Results on Overleaf](https://www.overleaf.com/project/68d89c98e6991a1fc59ea65e)
-
 ## Environment
 
 ```bash
@@ -15,8 +13,16 @@ source ~/envs/compress/bin/activate
 
 ## Latency/Efficiency eval
 
+GFLOP measurement:
+
 ```bash
 PYTHONNOUSERSITE=1 CUDA_VISIBLE_DEVICES=1 python Pi3_evaluation/latency_measure.py
+```
+
+Profiling:
+
+```bash
+CUDA_VISIBLE_DEVICES=3 PYTHONNOUSERSITE=1 python Pi3_evaluation/profiling.py
 ```
 
 
@@ -26,13 +32,13 @@ For Pi3:
 
 ```bash
 # stay in 'SVD-pi3' (root directory)
-CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/model.safetensors --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --baseline
+CUDA_VISIBLE_DEVICES=0 PYTHONNOUSERSITE=1 python Pi3_main/SVDPi3.py --ckpt /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/pi3_model.safetensors --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --baseline
 ```
 
 For VGGT:
 
 ```bash
-PYTHONNOUSERSITE=1 python Pi3_evaluation/SVD_VGGT.py --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/yusen_stuff/scannetv2 --baseline
+CUDA_VISIBLE_DEVICES=1 PYTHONNOUSERSITE=1 python Pi3_evaluation/SVD_VGGT.py --save_path /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache --ratio 0.2 --calibration_dataset_path /data/wanghaoxuan/yusen_stuff/scannetv2 --baseline
 ```
 
 ## Baseline 2: data whitening SVD
@@ -102,102 +108,3 @@ PYTHONNOUSERSITE=1 python Pi3_evaluation/mv_recon/eval.py
 PYTHONNOUSERSITE=1 python point_cloud_visualization_7scenes.py # for 7scenes
 PYTHONNOUSERSITE=1 python point_cloud_visualization_nrgbd.py # for NRGBD
 ```
-
-
-<!-- ### add visual-abstract features (does not gain improvement; we can put it into ablation study)
-
-- inspired by the paper `Think with Visual Abstract' (ICLR 2026 submission 4/4/6/4)
-- [x] binarization: use Otsu threshold (available OpenCV)
-- [x] contour: use Canny edges (available OpenCV)
-- [x] a simple sum **after normalization** as guide
-- [x] wire up evaluation pipeline
-
-
-binarization example:
-
-![alt text](/otsu_binarization_example.png)
-
-contour example:
-
-![alt text](/canny_edge_detection_example.png) -->
-
-<!-- ## Data Adaptive SVD (encoder-embedding; bad)
-
-idea: instead of checking the shannon entropy of input images, do it on the embedding after encoder layers
-- [x] apply k-means on embeddings (K=256) + compute entropy to allocate compression ratio (30%, 20%, 10%)  
-- [x] integrate its pipeline into evaluation
-
-results are bad though: 
-
-on Kitti 0.2711 Abs Rel versus 0.0984 (input-entropy-guided)
-
-potential explanation from ChatGPT: 
-- *"Pixel entropy survives domain shift better because it’s low-level; embedding entropy is very domain-sensitive."* -->
-
-
-<!-- ## Data Adaptive SVD (early-layer-cos-sim-drift)
-
-idea: compute cosine similarity drift in early (4) layers to allocate compression ratio (30%, 20%, 10%) 
-- [x] cosine similarity drift scorer
-- [x] hidden state extraction from early decoder layer
-- [x] integrate it into the evaluation pipeline
-
-
-learned ``adaptive_cfg_drifting.json``:
-
-```JSON
-{
-  "score_p5": 0.06869048625230789,
-  "score_p95": 0.07596379518508911,
-  "rr_values": [
-    0.1,
-    0.2,
-    0.3
-  ],
-  "tail_frac": 0.25,
-  "drift_probe": {
-    "kind": "cosine_drift_early_decoder",
-    "probe_layers": 4,
-    "ignore_special_tokens": true
-  },
-  "rr_thresholds": [
-    0.37957727909088135,
-    0.6646890640258789
-  ]
-}
-``` -->
-
-<!-- ### fine-grained budget mapping (proposal) -->
-
-
-
-
-
-<!-- ### Detailed illustration
-
-![alt text](/plain_whitening.png) -->
-
-<!-- ### Cholesky Decomposition does not always succeed
-
-```bash
-# collect the whitening matrix
-✅56/144 succeeded with Cholesky, 88/144 used EVD fallback
-```
-
-### Whitening is not always applied successfully
-
-```bash
-# apply whitening
-✅ 1 out of 144 layers fell back to plain SVD without whitening.✅
-```
-
-
-
-<!-- ## LoRA finetuning (WIP)
-
-```bash
-# a simple quick run
-accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05
-# run a long job offline
-nohup accelerate launch --config_file configs/accelerate/ddp.yaml --num_processes 1 --num_machines 1 Pi3_main/Pi3_LoRA.py --prune_model /data/wanghaoxuan/SVD_Pi3_cache/Pi3_whitening_only_scannet_0.2.safetensors --num_epochs 3 --batch_size 4 --micro_batch_size 1 --learning_rate 1e-4 --lora_r 8 --lora_alpha 16 --lora_dropout 0.05 > lora_train_3epochs.log 2>&1 &
-``` -->

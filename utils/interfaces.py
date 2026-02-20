@@ -2035,3 +2035,34 @@ def adaptive_infer_cameras_c2w_VGGT(filelist: str, model: VGGT, save_path: str, 
     extri_w2c, _ = pose_encoding_to_extri_intri(pose_enc, imgs.shape[-2:])
     poses_c2w = invert_w2c_3x4_to_c2w_4x4(extri_w2c)
     return poses_c2w.cpu()[0], None
+
+
+def adaptive_infer_mv_pointclouds_VGGT(filelist: str, model: VGGT, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
+    
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    first = imgs[:, :1] # select first image only for entropy computation
+    s = entropy_score_from_imgs(first, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    
+    global_points = pred['world_points'][0]  # (N, h, w, 3)
+    global_points = F.interpolate(
+        global_points.permute(0, 3, 1, 2), data_size,
+        mode="bilinear", align_corners=False, antialias=True
+    ).permute(0, 2, 3, 1)  # align to gt
+
+    return global_points.cpu().numpy()
+

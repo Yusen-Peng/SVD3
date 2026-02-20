@@ -22,6 +22,9 @@ from utils.messages import set_default_arg, write_csv
 from utils.vis_utils import save_image_grid_auto
 from utils.interfaces import install_twofactor_modules_from_sd, strip_factor_keys, install_slicabletwofactor_modules_from_sd
 
+from utils.interfaces import vggt_install_twofactor_modules_from_sd, vggt_install_slicabletwofactor_modules_from_sd
+from utils.interfaces import adaptive_infer_mv_pointclouds_VGGT
+
 
 @hydra.main(version_base="1.2", config_path="../configs", config_name="eval")
 def main(hydra_cfg: DictConfig):
@@ -31,24 +34,23 @@ def main(hydra_cfg: DictConfig):
 
     # 0. create model
     ADAPTIVE_MODE = 'input' # 'embedding' or 'input' or 'drift' ['input' is the best option so far]
-    
-    # false (not doing augmentation) leads to better results
     AUGMENTED = False
-    FINE_GRAINED = True
+    FINE_GRAINED = False
+    DIVERSE_CALI = False
+
     COMPRESSED = True if 'whitening' in pretrained_model_name_or_path.lower() or 'lora' in pretrained_model_name_or_path.lower() or 'baseline' in pretrained_model_name_or_path.lower() else False
     USE_VGGT = True if 'vggt' in pretrained_model_name_or_path.lower() else False
 
     device = hydra_cfg.device
     ckpt = pretrained_model_name_or_path
-    if not USE_VGGT:
-        sd = load_file(ckpt, device=str(device))
+    sd = load_file(ckpt, device=str(device))
 
-    if COMPRESSED:
+    if COMPRESSED and not USE_VGGT:
         print(f"😎Loading the compressed Pi3 from {ckpt}...")
         # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
         model = Pi3().to(device).eval()
 
-        ADAPTIVE = True if 'base' in pretrained_model_name_or_path.lower() else False
+        ADAPTIVE = 'BASE' in pretrained_model_name_or_path
         if ADAPTIVE:
             # support slicing
             install_slicabletwofactor_modules_from_sd(model, sd)
@@ -56,7 +58,17 @@ def main(hydra_cfg: DictConfig):
             model.load_state_dict(sd_rest, strict=False)
 
             # re-load the calibration dataset
-            cali_path = "/data/wanghaoxuan/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+            if DIVERSE_CALI:
+                cali_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/curation/diverse_pi3_calib_nsamples256_size224_seed3.pt"
+                save_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/diverse_adaptive_cfg.json"
+                print("🌈🌈🌈Using DIVERSE calibration dataset for learning adaptive cfg...🌈🌈🌈")
+            
+            else:
+                cali_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+                save_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/adaptive_cfg.json"
+                print("🌟🌟🌟Using SCANNET calibration dataset for learning adaptive cfg...🌟🌟🌟")
+
+
             cali_white_data = torch.load(cali_path, map_location="cpu")
             if ADAPTIVE_MODE == 'input':
                 if not AUGMENTED:
@@ -64,7 +76,7 @@ def main(hydra_cfg: DictConfig):
                         print("🍀🍀🍀Learning adaptive entropy cfg from calibration data...🍀🍀🍀")
                         learn_entropy_cfg_from_calib(
                             calib=cali_white_data,
-                            save_path='/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json',
+                            save_path=save_path,
                             bins=256,
                             tail_frac=0.25,
                             rr_values=(0.1, 0.2, 0.3),
@@ -82,6 +94,7 @@ def main(hydra_cfg: DictConfig):
                             alpha=6, # grid search (6, 8, 10) - 
                             device=device
                         )
+
                 else:
                     print("🌟🌟🌟Learning adaptive AUGMENTED entropy cfg from calibration data...🌟🌟🌟")
                     learn_augmented_entropy_cfg_from_calib(
@@ -92,6 +105,7 @@ def main(hydra_cfg: DictConfig):
                         rr_values=(0.1, 0.2, 0.3),
                         device=device
                     )
+
             elif ADAPTIVE_MODE == 'drift':
                 print("🧨🧨🧨Learning adaptive drifting cfg from calibration data...🧨🧨🧨")
                 learn_drift_cfg_from_calib(
@@ -107,15 +121,44 @@ def main(hydra_cfg: DictConfig):
             install_twofactor_modules_from_sd(model, sd)
             model.load_state_dict(sd, strict=False)
     else:
+
+        ADAPTIVE = 'BASE' in pretrained_model_name_or_path
+
         if USE_VGGT:
-            print(f"🤩🤩🤩Loading the VGGT from {ckpt}...🤩🤩🤩 on device {device}")
-            model = VGGT.from_pretrained("facebook/VGGT-1B").to(device)
+            if not COMPRESSED:
+                print(f"🤩🤩🤩Loading the ORIGINAL VGGT from {ckpt}...🤩🤩🤩 on device {device}")
+                model = VGGT().to(device).eval()
+                model.load_state_dict(sd, strict=True)
+            else:
+                if not ADAPTIVE:
+                    print(f"🥎🥎🥎Loading the COMPRESSED VGGT from {ckpt}...🥎🥎🥎 on device {device}")
+                    model = VGGT().to(device).eval()
+                    vggt_install_twofactor_modules_from_sd(model, sd)
+                    model.load_state_dict(sd, strict=False)
+                else:
+                    print(f"🏈🏈🏈Loading the COMPRESSED and ADAPTIVE VGGT from {ckpt}...🏈🏈🏈 on device {device}")
+                    save_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/adaptive_cfg.json"
+                    
+                    cali_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/scannet_pi3_calib_nsamples256_size224_seed3.pt"
+                    cali_white_data = torch.load(cali_path, map_location="cpu")
+
+                    learn_entropy_cfg_from_calib(
+                        calib=cali_white_data,
+                        save_path=save_path,
+                        bins=256,
+                        tail_frac=0.25,
+                        rr_values=(0.1, 0.2, 0.3),
+                        device=device
+                    )
+                    
+                    model = VGGT().to(device).eval()
+                    vggt_install_slicabletwofactor_modules_from_sd(model, sd)
+                    model.load_state_dict(sd, strict=False)
         else:
-            print(f"🥶🥶🥶Loading the ORIGINAL Pi3 from {ckpt}...🥶🥶🥶")
+            print(f"🥶Loading the ORIGINAL Pi3 from {ckpt}...")
             model = Pi3().to(device).eval()
             model.load_state_dict(sd, strict=True) # enforce it for original Pi3 model
     model.to(device)
-
 
 
     logger = logging.getLogger("mv_recon-eval")
@@ -158,11 +201,11 @@ def main(hydra_cfg: DictConfig):
 
             # 3. real inference, predicted pointcloud aligned to ground truth (data_h, data_w)
             data_h, data_w         = images.shape[-2:]
-            if COMPRESSED and ADAPTIVE:
+            if COMPRESSED and ADAPTIVE and not USE_VGGT:
                 if ADAPTIVE_MODE == 'input':
                     if not AUGMENTED:
                         if not FINE_GRAINED:
-                            pred_pts: np.ndarray = adaptive_infer_mv_pointclouds(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
+                            pred_pts: np.ndarray = adaptive_infer_mv_pointclouds(filelist, model, save_path, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
                         else:
                             pred_pts: np.ndarray = fine_grained_adaptive_infer_mv_pointclouds(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
                     else:
@@ -172,7 +215,11 @@ def main(hydra_cfg: DictConfig):
             
             else:
                 if USE_VGGT:
-                    pred_pts: np.ndarray = infer_mv_pointclouds_VGGT(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
+                    if not ADAPTIVE:
+                        pred_pts: np.ndarray = infer_mv_pointclouds_VGGT(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
+
+                    else:
+                        pred_pts: np.ndarray = adaptive_infer_mv_pointclouds_VGGT(filelist, model, save_path, hydra_cfg, (data_h, data_w))
                 else:
                     pred_pts: np.ndarray = infer_mv_pointclouds(filelist, model, hydra_cfg, (data_h, data_w))  # (N, H, W, 3)
             assert pred_pts.shape == gt_pts.shape, f"Predicted points shape {pred_pts.shape} does not match ground truth shape {gt_pts.shape}."

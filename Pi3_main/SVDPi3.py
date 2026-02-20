@@ -255,7 +255,7 @@ def Pi3_whitening(
         W = sanitize(W)
         m, n = W.shape # m=out_features, n=in_features
 
-        L = profiling_mat[key].to(dev).float()    # (in, in)
+        L = profilingpi_mat[key].to(dev).float()    # (in, in)
 
         Sigma = L @ L.T                           # (in, in)
         Sigma = 0.5 * (Sigma + Sigma.T)           # force symmetry
@@ -428,7 +428,7 @@ def main():
         accelerator = Accelerator()
         state_dict = accelerator.get_state_dict(model)
         from safetensors.torch import save_file
-        out_path = f"{args.save_path}/Pi3_svd_baseline_{str(args.ratio)}_BASE.safetensors"
+        out_path = f"{args.save_path}/Pi3_svd_baseline_{str(args.ratio)}.safetensors"
         save_file(state_dict, out_path)    
     print("✅✅✅ALL DONE!✅✅✅")
 

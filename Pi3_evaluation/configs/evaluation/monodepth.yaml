@@ -6,7 +6,7 @@ defaults:
 name: monodepth
 
 pi3:
-  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/pi3_model.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/pi3_model.safetensors
 
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
@@ -35,7 +35,7 @@ pi3:
 
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.4_BASE.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.5_BASE.safetensors
-  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.6_BASE.safetensors
+  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.6_BASE.safetensors
 
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.2.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.3.safetensors
@@ -44,6 +44,13 @@ pi3:
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.4_BASE.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.5_BASE.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.6_BASE.safetensors
+
+
+  ######## the following checkpoints are only served to measure GFLOPs
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.1.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.1.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.5.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_svd_baseline_0.5.safetensors
 
 eval_datasets:
   - sintel

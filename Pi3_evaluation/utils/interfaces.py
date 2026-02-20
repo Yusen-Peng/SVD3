@@ -23,12 +23,7 @@ root = rootutils.setup_root(__file__, indicator=".project-root", pythonpath=True
 from pi3.models.pi3 import Pi3
 from pi3.utils.geometry import se3_inverse
 from vggt.models.vggt import VGGT
-
-
-# NOTE: change it with other experiments
-BASE_RR = 0.4
-# BASE_RR = 0.5
-# BASE_RR = 0.6
+from utils.constants import BASE_RR
 
 
 @lru_cache(maxsize=1)
@@ -513,10 +508,14 @@ def augmented_entropy_score_from_imgs(imgs: torch.Tensor, bins: int = 256) -> fl
 def rr_from_entropy(s_norm: float, cfg: dict) -> float:
     th = cfg["rr_thresholds"]
     
-    # NOTE: change these with other experiments
-    rr = [0.1, 0.2, 0.3] # 10%, 20%, 30% compression ratios
-    #rr = [0.2, 0.3, 0.4] # 20%, 30%, 40% compression ratios
-    #rr = [0.3, 0.4, 0.5] # 30%, 40%, 50% compression ratios
+    if BASE_RR == 0.4:
+        rr = [0.1, 0.2, 0.3] # 10%, 20%, 30% compression ratios
+    elif BASE_RR == 0.5:
+        rr = [0.2, 0.3, 0.4] # 20%, 30%, 40% compression ratios
+    elif BASE_RR == 0.6:
+        rr = [0.3, 0.4, 0.5] # 30%, 40%, 50% compression ratios
+    else:
+        raise ValueError(f"Unsupported BASE_RR {BASE_RR}. Please set rr values manually in the code.")
 
     if s_norm < th[0]:
         return rr[0]
@@ -524,6 +523,17 @@ def rr_from_entropy(s_norm: float, cfg: dict) -> float:
         return rr[1]
     else:
         return rr[2]
+
+@torch.no_grad()
+def rr_from_entropy_efficiency_only(s_norm: float, cfg: dict) -> float:
+    th = cfg["rr_thresholds"]
+    if s_norm < th[0]:
+        return "low"
+    elif s_norm < th[1]:
+        return "medium"
+    else:
+        return "high"
+
     
 @torch.no_grad()
 def learn_entropy_cfg_from_calib(
@@ -856,6 +866,20 @@ def adaptive_infer_monodepth(file: str, model: Pi3, save_path: str, hydra_cfg: D
     points = pred['local_points'][0]
     depth_map = points[0, ..., -1].detach()
     return depth_map
+
+
+def adaptive_infer_monodepth_efficiency_only(file: str, model: Pi3, save_path: str, hydra_cfg: DictConfig):
+    imgs = load_and_resize14([file], new_width=hydra_cfg.load_img_size,
+                             device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg(save_path)
+    s = entropy_score_from_imgs(imgs, bins=256)
+    print(f"Entropy score: {s:.4f}")
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    print(f"Normalized entropy score: {s_norm:.4f}")
+    regime = rr_from_entropy_efficiency_only(s_norm, entropy_cfg)
+    return regime, s_norm  # "low", "medium", or "high"
 
 
 def adaptive_infer_monodepth_VGGT(file: str, model: VGGT, save_path: str, hydra_cfg: DictConfig):
@@ -1955,15 +1979,12 @@ def infer_mv_pointclouds_VGGT(filelist: str, model: VGGT, hydra_cfg: DictConfig,
     return global_points.cpu().numpy()
 
 
-
-
-
-def adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
+def adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, save_path: str, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
 
     imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
 
     # compute entropy score + map to retention
-    entropy_cfg = _load_entropy_cfg('/mnt/extdisk1/wanghaoxuan/SVD-pi3/adaptive_cfg.json')
+    entropy_cfg = _load_entropy_cfg(save_path)
     first = imgs[:, :1] # select first image only for entropy computation
     s = entropy_score_from_imgs(first, bins=256)
     s_norm = normalize_entropy_score(s, entropy_cfg)
@@ -1986,6 +2007,42 @@ def adaptive_infer_mv_pointclouds(filelist: str, model: Pi3, hydra_cfg: DictConf
     ).permute(0, 2, 3, 1)  # align to gt
 
     return global_points.cpu().numpy()
+
+
+
+def adaptive_infer_mv_pointclouds_VGGT(filelist: str, model: VGGT, save_path: str, hydra_cfg: DictConfig, data_size: Tuple[int, int]):
+    
+    imgs = load_and_resize14(filelist, new_width=hydra_cfg.load_img_size, device=hydra_cfg.device, verbose=hydra_cfg.verbose)
+
+    # compute entropy score + map to retention
+    entropy_cfg = _load_entropy_cfg(save_path)
+    first = imgs[:, :1] # select first image only for entropy computation
+    s = entropy_score_from_imgs(first, bins=256)
+    s_norm = normalize_entropy_score(s, entropy_cfg)
+    rr = rr_from_entropy(s_norm, entropy_cfg)
+
+    # slice fraction relative to base checkpoint rank
+    frac = min(1.0, rr / BASE_RR)
+    set_model_rank_frac(model, frac)
+
+    dtype = torch.bfloat16 if torch.cuda.get_device_capability()[0] >= 8 else torch.float16
+
+    with torch.no_grad():
+        with torch.amp.autocast(hydra_cfg.device, dtype=dtype):
+            pred = model(imgs)
+    
+    global_points = pred['world_points'][0]  # (N, h, w, 3)
+    global_points = F.interpolate(
+        global_points.permute(0, 3, 1, 2), data_size,
+        mode="bilinear", align_corners=False, antialias=True
+    ).permute(0, 2, 3, 1)  # align to gt
+
+    return global_points.cpu().numpy()
+
+
+
+
+
 
 
 
