@@ -330,9 +330,151 @@ def Pi3_get_calib_train_data(
 
 
 
+from typing import Tuple, Any
+import json
+
+
+@torch.no_grad()
+def entropy_score_from_imgs(imgs: torch.Tensor, bins: int = 256) -> float:
+    assert imgs.ndim == 5 and imgs.shape[0] == 1 and imgs.shape[1] == 1 and imgs.shape[2] == 3, \
+        f"Expected (1,1,3,H,W), got {tuple(imgs.shape)}"
+
+    x = imgs[0, 0]  # (3,H,W)
+    # grayscale
+    gray = 0.2989 * x[0] + 0.5870 * x[1] + 0.1140 * x[2]  # (H,W)
+    gray = gray.clamp(0, 1)
+
+    # quantize to [0, bins-1]
+    q = (gray * (bins - 1)).to(torch.int64)  # (H,W)
+
+    hist = torch.bincount(q.flatten(), minlength=bins).float()
+    p = hist / (hist.sum() + 1e-12)
+    H = -(p * (p + 1e-12).log2()).sum()
+    return float(H.item())
+
+@torch.no_grad()
+def normalize_entropy_score(s: float, cfg) -> float:
+    """
+    Percentile-based normalization using calibration statistics.
+
+    s_norm = clip((s - p5) / (p95 - p5), 0, 1)
+
+    Assumes entropy_p5 and entropy_p95 are computed on a calibration set.
+    """
+    p5  = float(cfg['entropy_p5'])
+    p95 = float(cfg['entropy_p95'])
+
+    denom = max(p95 - p5, 1e-6)
+    s_norm = (s - p5) / denom
+    return float(min(1.0, max(0.0, s_norm)))
+
+
+
+
+
+
+from typing import List, Dict, Optional, Union
+import os
+import csv
+import json
+import random
+
+import torch
+from PIL import Image
+from tqdm import tqdm
+
+
+def Pi3_get_entropy_logs_with_calib_train_data(
+    root: str,
+    nsamples: int = 256,
+    batch_size: int = 8,
+    image_size: int = 224,
+    split: str = "training",
+    seed: int = 3,
+    entropy_cfg: Optional[Union[str, Dict]] = None,   # NEW: cfg dict or path to json
+    save_entropy_csv: bool = True,                    # NEW
+    entropy_bins: int = 256,                          # NEW
+) -> List[Dict[str, torch.Tensor]]:
+    cfg: Optional[Dict] = None
+    if entropy_cfg is not None:
+        if isinstance(entropy_cfg, str):
+            with open(entropy_cfg, "r") as f:
+                cfg = json.load(f)
+        elif isinstance(entropy_cfg, dict):
+            cfg = entropy_cfg
+        else:
+            raise TypeError(f"entropy_cfg must be dict or path str, got {type(entropy_cfg)}")
+
+        # quick validation
+        if "entropy_p5" not in cfg or "entropy_p95" not in cfg:
+            raise ValueError("entropy_cfg must contain keys: 'entropy_p5' and 'entropy_p95'")
+
+    if root.endswith("sintel"):
+        frames = collect_sintel_frames(root, split, "final")
+        print(f"🍑 there are {len(frames)} total frames from Sintel {split} set.")
+        tag = "sintel"
+    elif "scannet" in root.lower():
+        frames = collect_scannet_frames(root)
+        print(f"🍑 there are {len(frames)} total frames from ScanNet set.")
+        tag = "scannet"
+    else:
+        raise NotImplementedError("This dataset is not supported yet.")
+
+    random.seed(seed)
+    torch.manual_seed(seed)
+    assert frames is not None
+    chosen = random.sample(frames, nsamples) if len(frames) >= nsamples else random.choices(frames, k=nsamples)
+
+    out_dir = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/"
+    csv_path = os.path.join(out_dir, f"{tag}_pi3_calib_entropy_nsamples{nsamples}_size{image_size}_seed{seed}.csv")
+    to_tensor = build_transform(image_size=image_size, center_crop=True)
+    traindataset: List[Dict[str, torch.Tensor]] = []
+    batch_imgs: Optional[List[torch.Tensor]] = None
+    entropy_rows = []  # list of (idx, path, raw, norm)
+    for idx, path in tqdm(enumerate(chosen), total=len(chosen), desc="Preparing calibration data"):
+        x = to_tensor(Image.open(path).convert("RGB"))  # (3,H,W) in [0,1] (assuming your transform)
+        if save_entropy_csv:
+            imgs = x.unsqueeze(0).unsqueeze(0)  # (1,1,3,H,W)
+            raw = entropy_score_from_imgs(imgs, bins=entropy_bins)
+            norm = normalize_entropy_score(raw, cfg) if cfg is not None else float("nan")
+            entropy_rows.append((idx, path, raw, norm))
+        if batch_imgs is None:
+            batch_imgs = []
+        batch_imgs.append(x)
+
+        full = (len(batch_imgs) == batch_size)
+        last = (idx == len(chosen) - 1)
+        if full or last:
+            pixel_values = torch.stack(batch_imgs, dim=0)
+            traindataset.append({"pixel_values": pixel_values})
+            batch_imgs = None
+    
+    # save csv
+    if save_entropy_csv:
+        os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["idx", "path", "raw_entropy", "norm_entropy"])
+            for (i, p, raw, norm) in entropy_rows:
+                w.writerow([i, p, f"{raw:.6f}", f"{norm:.6f}"])
+        print(f"📄 saved entropy csv: {csv_path}")
+        if cfg is None:
+            print("⚠️ entropy_cfg not provided → norm_entropy is NaN (raw_entropy still valid).")
+    return traindataset
+
 if __name__ == "__main__":
     # the original dataset
-    # root = "/data/wanghaoxuan/yusen_stuff/scannetv2"
-    
-    root = "diverse"
-    Pi3_get_calib_train_data(root, nsamples=256, batch_size=8, image_size=224, split="training", seed=3)
+    root = "/data/wanghaoxuan/yusen_stuff/scannetv2"
+    # root = "diverse"
+    # Pi3_get_calib_train_data(root, nsamples=256, batch_size=8, image_size=224, split="training", seed=3)
+    Pi3_get_entropy_logs_with_calib_train_data(
+        root,
+        nsamples=256,
+        batch_size=8,
+        image_size=224,
+        split="training",
+        seed=3,
+        entropy_cfg="/data/wanghaoxuan/yusen_stuff/SVD-pi3/adaptive_cfg.json",
+        save_entropy_csv=True,
+        entropy_bins=256
+    )
