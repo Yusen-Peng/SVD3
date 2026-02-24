@@ -19,11 +19,12 @@ GFLOP measurement:
 PYTHONNOUSERSITE=1 CUDA_VISIBLE_DEVICES=1 python Pi3_evaluation/latency_measure.py
 ```
 
-Profiling:
+Parameter measuring:
 
 ```bash
-CUDA_VISIBLE_DEVICES=3 PYTHONNOUSERSITE=1 python Pi3_evaluation/profiling.py
+CUDA_VISIBLE_DEVICES=3 PYTHONNOUSERSITE=1 python Pi3_evaluation/param_measure.py
 ```
+
 
 
 ## Baseline 1: plain SVD

@@ -160,7 +160,6 @@ SVD-LLM/second_half/*
 *.bin
 *.safetensors
 *.log
-*.csv
 *.pkl
 outputs/*
 first_half/*
