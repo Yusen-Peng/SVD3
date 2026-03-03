@@ -38,6 +38,13 @@ EVAL_DEPTH_METADATA = {
             "lr": 1e-3
         },
     },
+    "scannet": {
+        "depth_read_func": lambda filename: depth_read_scannet(filename),
+        "depth_evaluation_kwargs": {
+            "max_depth": None,
+            "use_gpu": True
+        },
+    },
 }
 
 
@@ -93,6 +100,15 @@ def depth_read_kitti(filename: str):
 
 def depth_read_nyu(filename: str):
     return np.load(filename)
+
+
+def depth_read_scannet(filename: str):
+    depth_png = np.array(Image.open(filename), dtype=np.uint16)
+    assert depth_png.max() > 255, "Not 16-bit depth PNG (looks like 8-bit viz)."
+    depth = depth_png.astype(np.float32) / 1000.0  # mm -> meters (ScanNet common)
+    depth[depth_png == 0] = -1.0
+    return depth
+
 
 
 # ------------------------------- 3. depth eval ---------------------------------------

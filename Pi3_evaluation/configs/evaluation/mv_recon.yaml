@@ -12,7 +12,7 @@ pi3:
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.3.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.4.safetensors
 
-  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.4_BASE.safetensors
+  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.4_BASE.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.5_BASE.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.6_BASE.safetensors
 
@@ -41,15 +41,15 @@ pi3:
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.3.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.4.safetensors
 
-  pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.4_BASE.safetensors
+  #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.4_BASE.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.5_BASE.safetensors
   #pretrained_model_name_or_path: /data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/VGGT_whitening_only_scannet_0.6_BASE.safetensors
 
 
 eval_datasets:
-  - 7scenes-sparse
+  # - 7scenes-sparse
   - 7scenes-dense
-  - NRGBD-sparse
+  # - NRGBD-sparse
   - NRGBD-dense
 
 no_crop: True
