@@ -1,9 +1,9 @@
 <p align="center">
-<img src="docs/arch.png" width="700"/>
+<img src="docs/pipeline.png" width="800"/>
 </p>
 
-<h1 align="center">SVD-π3</h1>
-<h2 align="center">Data-adaptive SVD for Efficient Visual Geometry Learning</h2>
+<h1 align="center">SVD^3</h1>
+<h2 align="center">Singular Value Decomposition for Visual Geometry Model Compression</h2>
 
 ## Environment
 
@@ -84,6 +84,13 @@ PYTHONNOUSERSITE=1 python Pi3_evaluation/latency_measure.py
 PYTHONNOUSERSITE=1 python Pi3_evaluation/monodepth/infer.py
 PYTHONNOUSERSITE=1 python Pi3_evaluation/monodepth/eval.py
 ```
+
+run a single sample inference with colorful visualization:
+
+```bash
+PYTHONNOUSERSITE=1 python Pi3_evaluation/single_inference/monodepth.py
+```
+
 
 ### Video Depth Estimation
 

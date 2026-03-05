@@ -397,8 +397,42 @@ def best_plotmode(traj):
     return getattr(plot.PlotMode, plot_axes)
 
 
+# def plot_trajectory(
+#     pred_traj, gt_traj=None, title="", filename="", align=True, correct_scale=True, verbose=False
+# ):
+#     pred_traj = make_traj(pred_traj)
+
+#     if gt_traj is not None:
+#         gt_traj = make_traj(gt_traj)
+#         if pred_traj.timestamps.shape[0] == gt_traj.timestamps.shape[0]:
+#             pred_traj.timestamps = gt_traj.timestamps
+#         else:
+#             print("WARNING", pred_traj.timestamps.shape[0], gt_traj.timestamps.shape[0])
+
+#         gt_traj, pred_traj = sync.associate_trajectories(gt_traj, pred_traj)
+
+#         if align:
+#             pred_traj.align(gt_traj, correct_scale=correct_scale)
+
+#     plot_collection = plot.PlotCollection("PlotCol")
+#     fig = plt.figure(figsize=(8, 8))
+#     plot_mode = best_plotmode(gt_traj if (gt_traj is not None) else pred_traj)
+#     ax = plot.prepare_axis(fig, plot_mode)
+#     ax.set_title(title)
+#     if gt_traj is not None:
+#         plot.traj(ax, plot_mode, gt_traj, "--", "gray", "Ground Truth")
+#     plot.traj(ax, plot_mode, pred_traj, "-", "blue", "Predicted")
+#     plot_collection.add_figure("traj_error", fig)
+#     plot_collection.export(filename, confirm_overwrite=False)
+#     plt.close(fig=fig)
+#     if verbose:
+#         print(f"Saved trajectory to {filename.replace('.png','')}_traj_error.png")
+
+
 def plot_trajectory(
-    pred_traj, gt_traj=None, title="", filename="", align=True, correct_scale=True, verbose=False
+    pred_traj, gt_traj=None, title="", filename="",
+    align=True, correct_scale=True, verbose=False,
+    legend_fontsize=16, legend_loc="best"
 ):
     pred_traj = make_traj(pred_traj)
 
@@ -418,15 +452,39 @@ def plot_trajectory(
     fig = plt.figure(figsize=(8, 8))
     plot_mode = best_plotmode(gt_traj if (gt_traj is not None) else pred_traj)
     ax = plot.prepare_axis(fig, plot_mode)
-    ax.set_title(title)
+
+    # ---- no title ----
+    # ax.set_title(title)  # delete this line
+
     if gt_traj is not None:
         plot.traj(ax, plot_mode, gt_traj, "--", "gray", "Ground Truth")
     plot.traj(ax, plot_mode, pred_traj, "-", "blue", "Predicted")
+
+    # ---- bigger legend ----
+    leg = ax.legend(
+        loc=legend_loc,
+        fontsize=legend_fontsize,   # text size
+        frameon=True,
+        handlelength=3.5,           # longer line in legend
+        handleheight=1.5,
+        markerscale=2.0,
+        borderpad=1.2
+    )
+    # ---- no axis name bullshit ----
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+    if hasattr(ax, "set_zlabel"):  # 3D axis
+        ax.set_zlabel("")
+
     plot_collection.add_figure("traj_error", fig)
     plot_collection.export(filename, confirm_overwrite=False)
     plt.close(fig=fig)
+
     if verbose:
         print(f"Saved trajectory to {filename.replace('.png','')}_traj_error.png")
+
+
+
 
 
 def save_trajectory_tum_format(traj, filename, verbose=False):

@@ -51,7 +51,7 @@ def main(hydra_cfg: DictConfig):
         # Baseline SVD checkpoint saved with .u/.v keys (TwoFactorLinear)
         model = Pi3().to(device).eval()
 
-        ADAPTIVE = True if 'base' in pretrained_model_name_or_path.lower() else False
+        ADAPTIVE = True if 'BASE' in pretrained_model_name_or_path else False
         if ADAPTIVE:
             # support slicing
             install_slicabletwofactor_modules_from_sd(model, sd)

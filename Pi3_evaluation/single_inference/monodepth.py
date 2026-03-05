@@ -69,11 +69,15 @@ def save_depth_colormap_png(depth_map: np.ndarray, png_save_path: str,
 def main(hydra_cfg: DictConfig):
     
     
-    model_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.4_BASE.safetensors"
-    #model_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors"
+    #model_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.4_BASE.safetensors"
+    model_path = "/data/wanghaoxuan/yusen_stuff/SVD_Pi3_cache/Pi3_svd_baseline_0.2.safetensors"
 
-    image_file = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/Pi3_evaluation/single_inference/sample_images/high_sample.jpg"
-    gt_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/Pi3_evaluation/single_inference/sample_images/high_depth.png"
+
+    image_file = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/Pi3_evaluation/single_inference/sample_images/final_sample.png"
+
+
+
+    #gt_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/Pi3_evaluation/single_inference/sample_images/high_depth.png"
 
     # image_file = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/Pi3_evaluation/single_inference/sample_images/mid_sample.jpg"
     # gt_path = "/data/wanghaoxuan/yusen_stuff/SVD-pi3/Pi3_evaluation/single_inference/sample_images/mid_depth.png"
@@ -216,16 +220,15 @@ def main(hydra_cfg: DictConfig):
     logger.info(f"Loaded Pi3 from {pretrained_model_name_or_path}")
 
     file = image_file
-    png_save_path = osp.join(save_dir, file.split('/')[-1].replace('.jpg', 'depth.png'))
+    png_save_path = osp.join(save_dir, file.split('/')[-1].replace('.png', 'depth.png'))
     # 3.2.3 save the depth map to the save_dir as npy
-    npy_save_path = osp.join(save_dir, file.split('/')[-1].replace('.jpg', 'depth.npy'))
-
+    npy_save_path = osp.join(save_dir, file.split('/')[-1].replace('.png', 'depth.npy'))
 
     if COMPRESSED and ADAPTIVE and not USE_VGGT:
         if ADAPTIVE_MODE == 'input':
             if not AUGMENTED:
                 if not FINE_GRAINED:
-                    depth_map = adaptive_infer_monodepth(file, model, save_path, hydra_cfg, verbose=True)
+                    depth_map = adaptive_infer_monodepth(file, model, save_path, hydra_cfg)
                 else:
                     depth_map = fine_grained_adaptive_infer_monodepth(file, model, hydra_cfg)
             else:
@@ -263,19 +266,19 @@ def main(hydra_cfg: DictConfig):
     save_depth_colormap_png(pred_depth, png_save_path.replace(".png", "_inferno.png"))
     
     
-    mono_metadata = EVAL_DEPTH_METADATA.get("scannet", None)
-    depth_read_func = mono_metadata["depth_read_func"]
-    gt_depth = depth_read_func(gt_path)
+    # mono_metadata = EVAL_DEPTH_METADATA.get("scannet", None)
+    # depth_read_func = mono_metadata["depth_read_func"]
+    # gt_depth = depth_read_func(gt_path)
 
-    Hgt, Wgt = gt_depth.shape[:2]
-    Hp, Wp = pred_depth.shape[:2]
+    # Hgt, Wgt = gt_depth.shape[:2]
+    # Hp, Wp = pred_depth.shape[:2]
 
-    if (Hp, Wp) != (Hgt, Wgt):
-        # resize prediction to GT size (recommended)
-        pred_depth = cv2.resize(pred_depth.astype(np.float32), (Wgt, Hgt), interpolation=cv2.INTER_LINEAR)
+    # if (Hp, Wp) != (Hgt, Wgt):
+    #     # resize prediction to GT size (recommended)
+    #     pred_depth = cv2.resize(pred_depth.astype(np.float32), (Wgt, Hgt), interpolation=cv2.INTER_LINEAR)
 
-    depth_results, _, _, _ = depth_evaluation(pred_depth, gt_depth)
-    print(depth_results)
+    # depth_results, _, _, _ = depth_evaluation(pred_depth, gt_depth)
+    # print(depth_results)
 
 
 
